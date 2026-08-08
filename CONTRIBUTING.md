@@ -3,10 +3,10 @@
 Thanks for helping FreeCord. Keep changes focused, avoid committing deployment data or secrets, and describe platform-specific behavior explicitly.
 
 1. Open an issue for substantial feature or architecture work.
-2. Create a branch from `main`.
+2. Fork the repository and create a branch from `main`.
 3. Run server tests, desktop type checks/build, Python contract tests, and migration validation.
 4. Add tests for behavior changes.
-5. Open a pull request with changed files, commands/tests run, failures, assumptions, and remaining risks.
+5. Open a pull request with changed files, commands/tests run, failures, assumptions, and remaining risks. Official changes require passing CI and approval from `@calebast`; contributors cannot push directly to `main`.
 
 Do not weaken Electron context isolation, sandboxing, IPC validation, authentication, authorization, or secret boundaries to simplify a feature. Do not include `.env`, tokens, personal deployment hostnames, user data, generated dependency trees, or release output in commits.
 

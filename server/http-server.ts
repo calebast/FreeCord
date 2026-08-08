@@ -405,7 +405,9 @@ export function createApiRuntime(overrides: Partial<ApiRuntime> = {}): ApiRuntim
     const auth = createInterfaceAuthService({ credentials, sessions, passwords: passwordHasher, accessTokens: tokens, invites: inviteStore, refreshTokenTtlSeconds: config.refreshTokenTtlSeconds });
     authenticate = async (context) => (await auth.authenticate(context)).user;
     if (config.initialAdminUsername && config.initialAdminPassword) {
-      ready = passwordHasher.hash(config.initialAdminPassword).then((hash) => bootstrapInitialAdmin(database, config.initialAdminUsername!, hash));
+      const bootstrapPassword = config.initialAdminPassword;
+      delete config.initialAdminPassword;
+      ready = passwordHasher.hash(bootstrapPassword).then((hash) => bootstrapInitialAdmin(database, config.initialAdminUsername!, hash));
     }
     const localApi = createLocalApi({ auth,
     community: {

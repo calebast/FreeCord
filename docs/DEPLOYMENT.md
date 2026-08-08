@@ -1,16 +1,37 @@
 # Deployment
 
-This is the supported single-host deployment for one FreeCord community. Docker Compose runs the API, PostgreSQL, LiveKit, and MinIO. Caddy or another TLS reverse proxy runs on the host or on the same routable network.
+FreeCord supports a single-host Docker Standalone deployment through Portainer's Web Editor or Docker Compose v2. The stack pulls published images; it does not clone the repository or build on the server.
 
 ## Requirements
 
-- A Linux server with Docker Engine and Compose v2
+- A Linux host with Docker Engine and Compose v2, or Portainer using a Docker Standalone environment
 - Two public DNS names: one for the API and one for LiveKit signaling
-- A trusted TLS certificate for each name
-- TCP `443` for HTTPS/WSS, TCP `7881` for LiveKit fallback, and UDP `50000-50010` for WebRTC media
-- NAT forwarding for all of those ports when the server is behind a router
+- Publicly trusted TLS certificates; self-signed certificates are not supported by the desktop client
+- TCP `443` for HTTPS/WSS, direct TCP `7881`, and direct UDP `50000-50010`
+- NAT forwarding for those ports when the server is behind a router
 
-The included topology does not include TURN. Users behind restrictive or symmetric NAT may fail to establish media. Add a properly secured TURN service before treating FreeCord as universally reachable.
+The included topology has no TURN server. Restrictive or symmetric NAT can still prevent media connections.
+
+## Portainer Web Editor
+
+1. In Portainer, open **Stacks**, choose **Add stack**, and select **Web editor**.
+2. Name the stack `freecord`.
+3. Copy the repository's complete [`compose.yaml`](../compose.yaml) into the editor.
+4. Add these environment variables below the editor:
+
+   ```dotenv
+   LIVEKIT_URL=wss://rtc.example.com
+   FREECORD_INITIAL_ADMIN_PASSWORD=replace-with-a-strong-unique-password
+   ```
+
+5. Optionally add `FREECORD_INITIAL_ADMIN_USERNAME`, `FREECORD_COMMUNITY_NAME`, `FREECORD_COMMUNITY_SLUG`, or `GIPHY_API_KEY`. See [Configuration](CONFIGURATION.md) for the full list.
+6. Deploy the stack. Enable Portainer's option to pull a newer image when intentionally upgrading a moving tag.
+
+`config-init`, `minio-init`, and `config-finalize` are one-shot jobs. An exited status with code `0` is expected. PostgreSQL, LiveKit, MinIO, and the API should remain running and become healthy.
+
+After signing in successfully, remove `FREECORD_INITIAL_ADMIN_PASSWORD` from the stack and redeploy. The owner account remains; changing this bootstrap value is not a password-reset mechanism.
+
+If an image pull reports `unauthorized`, confirm the GHCR package is public. If it reports `manifest unknown`, use `latest`, `main`, or an existing release tag from the package page.
 
 ## Docker Compose
 
@@ -19,72 +40,48 @@ git clone https://github.com/calebast/FreeCord.git
 cd FreeCord
 cp .env.example .env
 chmod 600 .env
-```
-
-Generate independent values for each secret. For example:
-
-```sh
-openssl rand -base64 48
-```
-
-Use a URL-safe PostgreSQL password or percent-encode it in `DATABASE_URL`. Never reuse the session, LiveKit, database, MinIO-root, or S3 application secrets.
-
-After editing `.env` and the Caddy example:
-
-```sh
-docker compose config
-docker compose up -d --build
+# Edit LIVEKIT_URL and FREECORD_INITIAL_ADMIN_PASSWORD.
+docker compose config --quiet
+docker compose pull
+docker compose up -d
 docker compose ps
-docker compose logs --tail=100 api livekit postgres minio
-curl https://api.example.com/health
 ```
 
-A healthy response reports the API, database, and LiveKit checks as `ok`.
-
-## Portainer Git stack
-
-Use these values when adding a stack from Git:
-
-- Repository URL: `https://github.com/calebast/FreeCord.git`
-- Repository reference: `refs/heads/main`
-- Compose path: `compose.yaml`
-
-Enter all non-commented variables from `.env.example` in Portainer's environment-variable editor. The values beginning with `change-me-` are examples only and must be replaced. Portainer must be allowed to build images from the repository.
-
-On first startup, provide both `FREECORD_INITIAL_ADMIN_USERNAME` and `FREECORD_INITIAL_ADMIN_PASSWORD`. After the owner account is created and tested, remove both from the stack. Changing them does not reset the owner password.
+The published service images currently target Linux AMD64. Exact release tags are preferred for controlled deployments; `latest` follows approved `main`.
 
 ## Reverse proxy and media ports
 
-Adapt `deploy/Caddyfile.example` to your hostnames. The API hostname proxies `/health` and `/v1/*`; the RTC hostname proxies LiveKit's WebSocket signaling endpoint.
+Adapt [`deploy/Caddyfile.example`](../deploy/Caddyfile.example) to your hostnames. The API hostname proxies `/health` and `/v1/*`; the RTC hostname proxies LiveKit WebSocket signaling.
 
-Caddy does not proxy WebRTC media. Route TCP `7881` and UDP `50000-50010` directly to the LiveKit container host. Do not expose PostgreSQL, MinIO port `9000`, or the MinIO console publicly.
+Caddy does not proxy WebRTC media. Route TCP `7881` and UDP `50000-50010` directly to the LiveKit host. Do not expose PostgreSQL, MinIO port `9000`, or the MinIO console publicly. The generated LiveKit configuration discovers the host's external IP for public/NAT deployments.
 
-## Persistent data
+## Persistent data and credentials
 
-Compose creates two named volumes:
+Compose creates seven named volumes:
 
-- `freecord_postgres-data`: accounts, channels, messages, roles, and audit events
-- `freecord_minio-data`: avatars, emotes, and uploaded attachments
+- `config-state`, `postgres-config`, `api-config`, `livekit-config`, and `minio-config`: generated installation metadata and isolated service credentials
+- `postgres-data`: accounts, channels, messages, roles, and audit events
+- `minio-data`: avatars, emotes, and uploaded attachments
 
-The exact prefix may vary with the Compose project name. Inspect it with `docker volume ls` rather than assuming a path.
+The Compose project name is added as a prefix. Use `docker volume ls` to see the exact names.
 
-Back up PostgreSQL and MinIO together so database object records match stored objects:
+Back up and restore **all seven volumes together**. The initializer refuses to silently generate new credentials when retained application data is detected, and it refuses a deployment where only one of PostgreSQL or MinIO still contains data. The volumes contain plaintext secrets or user data; protect Docker, Portainer, the host, and backups accordingly.
 
-```sh
-docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > freecord.sql
-docker run --rm -v freecord_minio-data:/source:ro -v "$PWD":/backup alpine \
-  tar -C /source -czf /backup/freecord-minio.tar.gz .
-```
-
-Test restoration on a separate host. Treat backups as sensitive because attachments are server-readable and database rows include authentication and encrypted-message metadata.
+Automatic generation is a convenience for single-host installs, not a managed secret vault. Advanced first-start overrides and current rotation limitations are documented in [Configuration](CONFIGURATION.md).
 
 ## Upgrade
 
-1. Back up both persistent stores.
+1. Back up all seven persistent volumes as one recovery set.
 2. Read `CHANGELOG.md` and release notes.
-3. Pull the desired tag, not an unreviewed moving branch.
-4. Run `docker compose config`.
-5. Run `docker compose up -d --build`.
-6. Check container health, API logs, sign-in, text, voice, and uploads.
+3. Set `FREECORD_IMAGE_TAG` to the desired exact release tag, or intentionally keep `latest`.
+4. In Portainer, enable pulling a newer image and redeploy. With the CLI, run:
 
-Database migrations run during API startup and are forward-only. Alpha releases do not yet promise downgrade compatibility.
+   ```sh
+   docker compose pull
+   docker compose up -d
+   docker compose ps
+   ```
+
+5. Verify sign-in, text, voice, and uploads.
+
+Database migrations run during API startup and are forward-only. Alpha releases do not promise downgrade compatibility.

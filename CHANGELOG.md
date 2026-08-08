@@ -2,6 +2,12 @@
 
 All notable public changes are documented here.
 
+## Unreleased
+
+- Made the public Compose stack deployable directly from Portainer's Web Editor using GHCR service images.
+- Added persistent automatic generation for internal PostgreSQL, session, LiveKit, MinIO, and S3 credentials.
+- Reduced first-deployment inputs to the public LiveKit URL and initial owner password.
+
 ## 0.8.0-alpha.1 - 2026-08-08
 
 - First public FreeCord source and installer release.

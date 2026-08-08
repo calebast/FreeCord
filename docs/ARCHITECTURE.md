@@ -16,6 +16,9 @@ Context isolation and renderer sandboxing remain enabled. The app does not load 
 - **PostgreSQL:** permanent relational data and integrity constraints.
 - **LiveKit:** WebRTC voice, screen video, and screen audio when capture is available.
 - **MinIO:** S3-compatible avatars, emotes, and attachments.
+- **Config initializer:** runs without networking and generates isolated
+  service credentials once. Each runtime service mounts only its own
+  read-only configuration volume.
 
 Redis is not currently required. Presence and event fan-out are process-local, so the supported topology is one API replica. Multi-replica deployment requires a shared realtime backplane before it is safe.
 
@@ -34,3 +37,8 @@ The client receives application events over authenticated server-sent events and
 ## Deployment boundary
 
 Caddy proxies API HTTPS and LiveKit WebSocket signaling. LiveKit media bypasses Caddy over direct UDP, with direct TCP fallback. PostgreSQL and MinIO remain private to Compose. TURN, horizontal API scaling, automatic updates, and managed secret storage are future hardening work.
+
+The five configuration volumes, PostgreSQL, and MinIO form one recovery unit.
+Initialization fails closed when retained data and generated configuration are
+incomplete or obviously mismatched; backups and restores must keep all seven
+volumes aligned.

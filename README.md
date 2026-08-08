@@ -33,21 +33,21 @@ See [Platform support](docs/PLATFORM_SUPPORT.md) for known limitations.
 ## Quick start
 
 1. Give the server two public DNS names, such as `api.example.com` and `rtc.example.com`.
-2. Clone this repository and copy `.env.example` to `.env`.
-3. Replace every `change-me-...` value and set `LIVEKIT_URL` to the public `wss://` RTC hostname.
+2. Clone this repository, copy `.env.example` to `.env`, and set the public `LIVEKIT_URL` plus a strong initial owner password.
+3. Pull the published service images with `docker compose pull`.
 4. Open TCP `443` and `7881`, plus UDP `50000-50010`, at the host and upstream firewall. Forward them through NAT when applicable.
 5. Adapt `deploy/Caddyfile.example`, then run:
 
    ```sh
-   docker compose up -d --build
+   docker compose up -d
    docker compose ps
    curl https://api.example.com/health
    ```
 
 6. Install the desktop client, enter `https://api.example.com`, and sign in with the bootstrap owner credentials.
-7. Create invitation tokens from the owner/admin interface. Remove the two bootstrap credential variables from the deployment after the owner exists.
+7. Create invitation tokens from the owner/admin interface. Remove the bootstrap password from the deployment after the owner exists.
 
-Portainer-specific steps, backup guidance, and upgrade instructions are in [Deployment](docs/DEPLOYMENT.md).
+The same `compose.yaml` can be pasted directly into Portainer's Web Editor; no Git checkout or server-side build tools are required. Portainer steps, backup guidance, and upgrade instructions are in [Deployment](docs/DEPLOYMENT.md).
 
 ## Architecture
 

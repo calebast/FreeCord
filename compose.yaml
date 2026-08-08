@@ -1,19 +1,51 @@
-# Supported FreeCord deployment for the Node API, PostgreSQL, and LiveKit.
-#
-# The LiveKit service is intentionally pinned to a release. Set all required
-# values in an uncommitted .env file or the shell environment before starting.
+# FreeCord single-host stack for Portainer's Web Editor or Docker Compose.
+# First deployment requires only:
+#   LIVEKIT_URL=wss://rtc.example.com
+#   FREECORD_INITIAL_ADMIN_PASSWORD=a-unique-password-at-least-12-characters
 services:
+  config-init:
+    image: ghcr.io/calebast/freecord-api:${FREECORD_IMAGE_TAG:-latest}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/freecord-config-init"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+    environment:
+      # Optional first-start overrides. Normally leave these blank.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+    volumes:
+      - config-state:/run/freecord-state
+      - postgres-config:/run/freecord-postgres
+      - api-config:/run/freecord-api
+      - livekit-config:/run/freecord-livekit
+      - minio-config:/run/freecord-minio
+      - postgres-data:/state/postgres:ro
+      - minio-data:/state/minio:ro
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    depends_on:
+      config-init: { condition: service_completed_successfully }
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-freecord}
-      POSTGRES_USER: ${POSTGRES_USER:-freecord}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a PostgreSQL password}
+      POSTGRES_DB: freecord
+      POSTGRES_USER: freecord
+      POSTGRES_PASSWORD_FILE: /run/freecord-postgres/postgres-password
     volumes:
+      - postgres-config:/run/freecord-postgres:ro
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U freecord -d freecord"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -22,25 +54,16 @@ services:
   livekit:
     image: livekit/livekit-server:v1.13.1
     restart: unless-stopped
-    environment:
-      # Compose renders this into the container at startup; neither value is
-      # stored in this file. Do not use LiveKit's --dev credentials here.
-      LIVEKIT_CONFIG: |
-        port: 7880
-        rtc:
-          tcp_port: 7881
-          port_range_start: 50000
-          port_range_end: 50010
-        keys:
-          ${LIVEKIT_API_KEY:?set the LiveKit API key}: ${LIVEKIT_API_SECRET:?set the LiveKit API secret}
+    depends_on:
+      config-init: { condition: service_completed_successfully }
+    command: ["--config", "/run/freecord-livekit/livekit.yaml"]
+    volumes:
+      - livekit-config:/run/freecord-livekit:ro
     ports:
       - "${LIVEKIT_SIGNALING_PORT:-7880}:7880/tcp"
       - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881/tcp"
       - "${LIVEKIT_RTC_UDP_PORT_RANGE:-50000-50010}:50000-50010/udp"
     healthcheck:
-      # LiveKit's base image includes BusyBox wget. The root handler may be a
-      # 404, so accept both a normal response and an HTTP-level 404; connection
-      # failures still fail the check.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7880/; code=$$?; test $$code -eq 0 -o $$code -eq 8"]
       interval: 5s
       timeout: 3s
@@ -48,18 +71,12 @@ services:
       start_period: 5s
 
   minio:
-    build:
-      context: .
-      dockerfile: server/minio.Dockerfile
-      args:
-        MINIO_VERSION: ${MINIO_VERSION:-RELEASE.2025-10-15T17-29-55Z}
-        MINIO_MC_VERSION: ${MINIO_MC_VERSION:-RELEASE.2025-08-13T08-35-41Z}
+    image: ghcr.io/calebast/freecord-minio:${FREECORD_IMAGE_TAG:-latest}
     restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set a MinIO root username used only for storage initialization}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set a long MinIO root password used only for storage initialization}
+    depends_on:
+      config-init: { condition: service_completed_successfully }
     volumes:
+      - minio-config:/run/freecord-minio:ro
       - minio-data:/data
     ports:
       - "${MINIO_CONSOLE_BIND:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -71,69 +88,63 @@ services:
       start_period: 10s
 
   minio-init:
-    build:
-      context: .
-      dockerfile: server/minio.Dockerfile
-      args:
-        MINIO_VERSION: ${MINIO_VERSION:-RELEASE.2025-10-15T17-29-55Z}
-        MINIO_MC_VERSION: ${MINIO_MC_VERSION:-RELEASE.2025-08-13T08-35-41Z}
+    image: ghcr.io/calebast/freecord-minio:${FREECORD_IMAGE_TAG:-latest}
     restart: "no"
     entrypoint: ["/usr/local/bin/freecord-minio-init"]
     depends_on:
-      minio:
-        condition: service_healthy
+      config-init: { condition: service_completed_successfully }
+      minio: { condition: service_healthy }
     environment:
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set a MinIO root username used only for storage initialization}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set a long MinIO root password used only for storage initialization}
       S3_BUCKET: ${S3_BUCKET:-freecord-media}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set a separate FreeCord API storage access key}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?set a separate FreeCord API storage secret key}
+    volumes:
+      - minio-config:/run/freecord-minio:ro
+
+  config-finalize:
+    image: ghcr.io/calebast/freecord-api:${FREECORD_IMAGE_TAG:-latest}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/freecord-config-finalize"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["DAC_OVERRIDE", "FOWNER"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    volumes:
+      - config-state:/run/freecord-state
 
   api:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
+    image: ghcr.io/calebast/freecord-api:${FREECORD_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
-      livekit:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      config-finalize: { condition: service_completed_successfully }
+      livekit: { condition: service_healthy }
     environment:
       NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 8080
-      APP_VERSION: 0.8.0-alpha.1
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to the postgres service}
-      DATABASE_SSL: ${DATABASE_SSL:-false}
-      SESSION_SECRET: ${SESSION_SECRET:?set a long random session secret}
-      # Required together on first startup. They may both be removed after the
-      # owner account has been initialized.
-      FREECORD_INITIAL_ADMIN_USERNAME: ${FREECORD_INITIAL_ADMIN_USERNAME:-}
+      POSTGRES_DB: freecord
+      POSTGRES_USER: freecord
+      DATABASE_SSL: "false"
+      FREECORD_INITIAL_ADMIN_USERNAME: ${FREECORD_INITIAL_ADMIN_USERNAME:-admin}
       FREECORD_INITIAL_ADMIN_PASSWORD: ${FREECORD_INITIAL_ADMIN_PASSWORD:-}
       FREECORD_COMMUNITY_NAME: ${FREECORD_COMMUNITY_NAME:-FreeCord}
       FREECORD_COMMUNITY_SLUG: ${FREECORD_COMMUNITY_SLUG:-freecord}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_BUCKET: ${S3_BUCKET:-freecord-media}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set an S3/MinIO access key}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?set a long S3/MinIO secret key}
-      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
-      MEDIA_MAX_UPLOAD_BYTES: ${MEDIA_MAX_UPLOAD_BYTES:-26214400}
-      LIVEKIT_URL: ${LIVEKIT_URL:?set the LiveKit signaling URL}
-      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-http://livekit:7880}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set the LiveKit API key}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set the LiveKit API secret}
+      LIVEKIT_URL: ${LIVEKIT_URL:?set the public LiveKit wss URL}
+      LIVEKIT_API_URL: http://livekit:7880
       LIVEKIT_TOKEN_TTL_SECONDS: ${LIVEKIT_TOKEN_TTL_SECONDS:-60}
       ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-600}
       REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-2592000}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-freecord-media}
+      S3_FORCE_PATH_STYLE: "true"
+      MEDIA_MAX_UPLOAD_BYTES: ${MEDIA_MAX_UPLOAD_BYTES:-26214400}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
+    volumes:
+      - api-config:/run/freecord-api:ro
     ports:
       - "${FREECORD_API_PORT:-8081}:8080"
     healthcheck:
@@ -144,5 +155,10 @@ services:
       start_period: 15s
 
 volumes:
+  config-state:
+  postgres-config:
+  api-config:
+  livekit-config:
+  minio-config:
   postgres-data:
   minio-data:

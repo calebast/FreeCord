@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 export interface ServerConfig {
   nodeEnv: "development" | "test" | "production";
   host: string;
@@ -44,6 +46,23 @@ function optionalString(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function secretString(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const direct = optionalString(env[name]);
+  const filePath = optionalString(env[`${name}_FILE`]);
+  if (direct && filePath) {
+    throw new ConfigurationError(`${name} and ${name}_FILE must not both be provided`);
+  }
+  if (!filePath) return direct;
+  try {
+    const value = optionalString(readFileSync(filePath, "utf8"));
+    if (!value) throw new ConfigurationError(`${name}_FILE is empty`);
+    return value;
+  } catch (error) {
+    if (error instanceof ConfigurationError) throw error;
+    throw new ConfigurationError(`${name}_FILE could not be read`);
+  }
+}
+
 function positiveInteger(name: string, value: string | undefined, fallback: number): number {
   const raw = value ?? String(fallback);
   const parsed = Number(raw);
@@ -59,22 +78,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     throw new ConfigurationError("NODE_ENV must be development, test, or production");
   }
 
-  const databaseUrl = optionalString(env.DATABASE_URL);
+  const databasePassword = secretString(env, "DATABASE_PASSWORD");
+  const databaseUrl = optionalString(env.DATABASE_URL) ?? (databasePassword
+    ? `postgresql://${encodeURIComponent(env.POSTGRES_USER?.trim() || "freecord")}:${encodeURIComponent(databasePassword)}@postgres:5432/${encodeURIComponent(env.POSTGRES_DB?.trim() || "freecord")}`
+    : undefined);
   const livekitUrl = optionalString(env.LIVEKIT_URL);
-  const livekitApiKey = optionalString(env.LIVEKIT_API_KEY);
-  const livekitApiSecret = optionalString(env.LIVEKIT_API_SECRET);
+  const livekitApiKey = secretString(env, "LIVEKIT_API_KEY");
+  const livekitApiSecret = secretString(env, "LIVEKIT_API_SECRET");
   const livekitApiUrl = optionalString(env.LIVEKIT_API_URL);
-  const sessionSecret = optionalString(env.SESSION_SECRET);
-  const initialAdminUsername = optionalString(env.FREECORD_INITIAL_ADMIN_USERNAME);
-  const initialAdminPassword = optionalString(env.FREECORD_INITIAL_ADMIN_PASSWORD);
+  const sessionSecret = secretString(env, "SESSION_SECRET");
+  const initialAdminPassword = secretString(env, "FREECORD_INITIAL_ADMIN_PASSWORD");
+  if (env === process.env) delete process.env.FREECORD_INITIAL_ADMIN_PASSWORD;
+  const initialAdminUsername = initialAdminPassword
+    ? optionalString(env.FREECORD_INITIAL_ADMIN_USERNAME) ?? "admin"
+    : undefined;
   const giphyApiKey = optionalString(env.GIPHY_API_KEY);
   const s3Endpoint = optionalString(env.S3_ENDPOINT);
   const s3Bucket = optionalString(env.S3_BUCKET);
-  const s3AccessKey = optionalString(env.S3_ACCESS_KEY);
-  const s3SecretKey = optionalString(env.S3_SECRET_KEY);
-  if (Boolean(initialAdminUsername) !== Boolean(initialAdminPassword)) {
-    throw new ConfigurationError("FREECORD_INITIAL_ADMIN_USERNAME and FREECORD_INITIAL_ADMIN_PASSWORD must be provided together");
-  }
+  const s3AccessKey = secretString(env, "S3_ACCESS_KEY");
+  const s3SecretKey = secretString(env, "S3_SECRET_KEY");
   if (nodeEnv === "production" && !databaseUrl) {
     throw new ConfigurationError("DATABASE_URL is required in production");
   }

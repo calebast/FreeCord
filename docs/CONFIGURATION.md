@@ -1,73 +1,64 @@
 # Configuration
 
-Copy `.env.example` to an uncommitted `.env` file or enter equivalent values in Portainer. Blank values are intentional only where explicitly noted.
+FreeCord generates and persists its internal database, session, LiveKit, MinIO, and S3 credentials. A normal deployment only needs two values.
 
-## PostgreSQL
+## Required on first deployment
 
-| Variable | Required | Purpose |
+| Variable | Purpose |
+| --- | --- |
+| `LIVEKIT_URL` | Public trusted signaling URL returned to clients, normally `wss://rtc.example.com`. |
+| `FREECORD_INITIAL_ADMIN_PASSWORD` | Initial owner password. Use at least 12 characters. It is ignored after the first account is created and may then be removed. |
+
+The initial username defaults to `admin`. When no bootstrap password is present, the username is ignored; this allows the password to be removed safely after initialization.
+
+## Common options
+
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `POSTGRES_DB` | Yes | Database created by the PostgreSQL container. |
-| `POSTGRES_USER` | Yes | Database application user. |
-| `POSTGRES_PASSWORD` | Yes | Strong database password. |
-| `DATABASE_URL` | Yes | API connection string using the Compose hostname `postgres`. Percent-encode reserved password characters. |
-| `DATABASE_SSL` | No | Keep `false` for the private Compose network; enable only with a correctly configured external TLS database. |
+| `FREECORD_INITIAL_ADMIN_USERNAME` | `admin` | Initial owner username. |
+| `FREECORD_COMMUNITY_NAME` | `FreeCord` | Name of this installation's single community. |
+| `FREECORD_COMMUNITY_SLUG` | `freecord` | Stable lowercase community identifier. |
+| `FREECORD_API_PORT` | `8081` | Host port for the API reverse proxy. |
+| `GIPHY_API_KEY` | blank | Enables server-side Giphy search. |
+| `ALLOWED_ORIGINS` | blank | Comma-separated browser origins for CORS. Desktop-only deployments leave this blank. |
+| `FREECORD_IMAGE_TAG` | `latest` | GHCR image tag. Pin a release tag for controlled production upgrades. |
 
-## Community and authentication
+## Networking and limits
 
-| Variable | Required | Purpose |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `FREECORD_INITIAL_ADMIN_USERNAME` | First start | Initial owner username; supply together with the password, then remove both. |
-| `FREECORD_INITIAL_ADMIN_PASSWORD` | First start | Initial owner password; minimum 12 characters is recommended. |
-| `FREECORD_COMMUNITY_NAME` | No | Display name for this single community. |
-| `FREECORD_COMMUNITY_SLUG` | No | Stable lowercase community identifier. |
-| `SESSION_SECRET` | Yes | Unique high-entropy secret for sessions and refresh-token protection. |
-| `ACCESS_TOKEN_TTL_SECONDS` | No | Short-lived API access-token lifetime; default `600`. |
-| `REFRESH_TOKEN_TTL_SECONDS` | No | Refresh-session lifetime; default `2592000` (30 days). |
-| `ALLOWED_ORIGINS` | No | Comma-separated browser origins for CORS. Leave blank for desktop-only deployments. |
+| `LIVEKIT_SIGNALING_PORT` | `7880` | Host signaling port behind the TLS proxy. |
+| `LIVEKIT_RTC_TCP_PORT` | `7881` | Direct WebRTC TCP fallback port. |
+| `LIVEKIT_RTC_UDP_PORT_RANGE` | `50000-50010` | Direct WebRTC UDP media range. Keep firewall forwarding aligned. |
+| `MINIO_CONSOLE_BIND` | `127.0.0.1` | MinIO console bind address. Do not expose it publicly. |
+| `MINIO_CONSOLE_PORT` | `9001` | MinIO console port. |
+| `MEDIA_MAX_UPLOAD_BYTES` | `26214400` | Upload maximum, capped by the API at 25 MiB. |
+| `ACCESS_TOKEN_TTL_SECONDS` | `600` | API access-token lifetime. |
+| `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Refresh-session lifetime. |
+| `LIVEKIT_TOKEN_TTL_SECONDS` | `60` | LiveKit participant-token lifetime. |
 
-## LiveKit
+## Storage options
 
-| Variable | Required | Purpose |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `LIVEKIT_URL` | Yes | Public trusted signaling URL, normally `wss://rtc.example.com`. Returned to clients. |
-| `LIVEKIT_API_URL` | Yes | Server-side LiveKit endpoint; keep `http://livekit:7880` in Compose. |
-| `LIVEKIT_API_KEY` | Yes | Random LiveKit API key shared only by API and LiveKit. |
-| `LIVEKIT_API_SECRET` | Yes | Strong signing secret shared only by API and LiveKit. |
-| `LIVEKIT_TOKEN_TTL_SECONDS` | No | Participant token lifetime; default `60`. |
-| `LIVEKIT_SIGNALING_PORT` | No | Host port mapped to signaling; default `7880`. Usually reached through the TLS proxy. |
-| `LIVEKIT_RTC_TCP_PORT` | No | Direct TCP media fallback port; default `7881`. |
-| `LIVEKIT_RTC_UDP_PORT_RANGE` | No | Direct UDP media range; default `50000-50010`. Keep host and firewall ranges aligned. |
+| `S3_REGION` | `us-east-1` | S3-compatible region label. |
+| `S3_BUCKET` | `freecord-media` | MinIO bucket. Set only before first initialization. |
 
-## Object storage
+## Automatically generated internal secrets
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `MINIO_ROOT_USER` | Yes | Private MinIO administrator used only during initialization. |
-| `MINIO_ROOT_PASSWORD` | Yes | Strong MinIO administrator password. |
-| `MINIO_CONSOLE_BIND` | No | Console bind address; default loopback only. |
-| `MINIO_CONSOLE_PORT` | No | Host console port; default `9001`. |
-| `MINIO_VERSION` | No | Pinned MinIO release used by the local image. |
-| `MINIO_MC_VERSION` | No | Pinned MinIO client release used for initialization. |
-| `S3_ENDPOINT` | Yes | API object endpoint; keep `http://minio:9000` in Compose. |
-| `S3_REGION` | No | S3 region label; default `us-east-1`. |
-| `S3_BUCKET` | No | Bucket initialized for FreeCord objects. |
-| `S3_ACCESS_KEY` | Yes | Separate bucket-limited application access key. Do not reuse the MinIO root account. |
-| `S3_SECRET_KEY` | Yes | Separate strong application storage secret. |
-| `S3_FORCE_PATH_STYLE` | No | Keep `true` for the bundled MinIO service. |
-| `MEDIA_MAX_UPLOAD_BYTES` | No | Maximum upload body, default `26214400` (25 MiB). Reverse-proxy limits must be at least this large. |
+The offline one-shot `config-init` service creates these values without logging their contents:
 
-## Optional integrations and ports
+- PostgreSQL password
+- API session secret
+- LiveKit API key and signing secret
+- MinIO root username and password
+- Bucket-limited S3 application key and secret
+- LiveKit server configuration
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `GIPHY_API_KEY` | No | Enables server-side Giphy search. Obtain and apply a key under Giphy's terms. |
-| `FREECORD_API_PORT` | No | Host API port behind the reverse proxy; default `8081`. |
-| `FREECORD_FILES_ORIGIN` | No | Desktop-process-only Copyparty origin. It is not consumed by Compose and must be present in the packaged client's process environment. The Copyparty host must allow embedding and use trusted HTTPS. |
+Credentials are split across `postgres-config`, `api-config`, `livekit-config`, and `minio-config`; runtime services mount only their own volume read-only. `config-state` records initialization and is finalized only after PostgreSQL and MinIO are ready, allowing an interrupted first boot to resume safely. Files are mode `0400`, directories are mode `0700`, and normal redeployment reuses them.
 
-## Secret rules
+Treat all five configuration volumes plus `postgres-data` and `minio-data` as one backup and restore set. The initializer fails closed when configuration is missing but retained data exists, or when only one application data store remains. Do not delete or restore these volumes independently.
 
-- Keep `.env` out of Git and limit it to the deployment administrator.
-- Use a different random value for every secret field.
-- Never put `DATABASE_URL`, LiveKit secrets, S3 secrets, or `SESSION_SECRET` in the Electron app.
-- Rotate exposed secrets immediately, then revoke active sessions where applicable.
-- The initial owner variables are bootstrap inputs, not an account-reset mechanism.
+Advanced operators may seed values on the **first** deployment with `POSTGRES_PASSWORD`, `SESSION_SECRET`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `S3_ACCESS_KEY`, and `S3_SECRET_KEY`. Existing generated files take precedence on later deployments, so changing these environment variables does not rotate credentials. Identifiers are restricted to letters, numbers, underscores, and hyphens; the PostgreSQL password must be URL-safe; service secrets must contain at least 32 characters and remain distinct.
+
+The bootstrap owner password is necessarily visible to Portainer/Docker while supplied as an environment value. The API removes it from its process environment after loading it, hashes it for first-account initialization, and does not persist the plaintext; remove the value from Portainer after the owner exists. Do not put any server credential in the desktop application. Rotation currently requires coordinated maintenance and is not performed by ordinary redeployment.

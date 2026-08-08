@@ -1,6 +1,20 @@
 #!/bin/sh
 set -eu
 
+config_dir=${FREECORD_MINIO_CONFIG_DIR:-/run/freecord-minio}
+if [ -d "$config_dir" ]; then
+  MINIO_ROOT_USER=$(cat "$config_dir/minio-root-user")
+  MINIO_ROOT_PASSWORD=$(cat "$config_dir/minio-root-password")
+  S3_ACCESS_KEY=$(cat "$config_dir/s3-access-key")
+  S3_SECRET_KEY=$(cat "$config_dir/s3-secret-key")
+  export MINIO_ROOT_USER MINIO_ROOT_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY
+fi
+
+: "${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}"
+: "${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}"
+: "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
+: "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
+
 alias_name=freecord
 policy_file=/tmp/freecord-media-policy.json
 
@@ -30,6 +44,12 @@ cat >"$policy_file" <<EOF
 }
 EOF
 
-mc admin user add "$alias_name" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
-mc admin policy create "$alias_name" freecord-media "$policy_file"
+if mc admin user info "$alias_name" "$S3_ACCESS_KEY" >/dev/null 2>&1; then
+  mc admin user enable "$alias_name" "$S3_ACCESS_KEY" >/dev/null
+else
+  mc admin user add "$alias_name" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+fi
+if ! mc admin policy info "$alias_name" freecord-media >/dev/null 2>&1; then
+  mc admin policy create "$alias_name" freecord-media "$policy_file"
+fi
 mc admin policy attach "$alias_name" freecord-media --user "$S3_ACCESS_KEY"

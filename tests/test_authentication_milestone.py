@@ -48,11 +48,10 @@ class BootstrapConfigurationContractTests(unittest.TestCase):
 
     def test_example_contains_placeholders_not_bootstrap_credentials(self) -> None:
         env_example = source(ROOT / ".env.example")
-        for name in ("FREECORD_INITIAL_ADMIN_USERNAME", "FREECORD_INITIAL_ADMIN_PASSWORD"):
-            match = re.search(rf"^{name}=([^\n]*)$", env_example, re.MULTILINE)
-            self.assertIsNotNone(match, name)
-            value = match.group(1).strip().strip("\"'")
-            self.assertRegex(value.lower(), r"^(generate|your|change|replace|set)-")
+        password = re.search(r"^FREECORD_INITIAL_ADMIN_PASSWORD=([^\n]*)$", env_example, re.MULTILINE)
+        self.assertIsNotNone(password)
+        self.assertRegex(password.group(1).strip().strip("\"'").lower(), r"^(generate|your|change|replace|set)-")
+        self.assertRegex(env_example, r"(?m)^FREECORD_INITIAL_ADMIN_USERNAME=admin$")
 
 
 class InviteOnlyRegistrationContractTests(unittest.TestCase):

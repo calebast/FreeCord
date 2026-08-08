@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig, ConfigurationError } from "./env.js";
 import { createHttpServer, type ApiRuntime } from "./http-server.js";
 import type { DatabaseBoundary } from "./database.js";
@@ -10,6 +13,34 @@ const database: DatabaseBoundary = { configured: false, query: async () => ({ ro
 
 test("production configuration rejects missing database and session secret", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), ConfigurationError);
+});
+
+test("production configuration reads generated secrets from isolated files", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "freecord-config-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const databasePasswordFile = join(directory, "database-password");
+  const sessionSecretFile = join(directory, "session-secret");
+  writeFileSync(databasePasswordFile, "database-password-with-@-character", { mode: 0o400 });
+  writeFileSync(sessionSecretFile, "session-secret-longer-than-thirty-two-characters", { mode: 0o400 });
+
+  const config = loadConfig({
+    NODE_ENV: "production",
+    POSTGRES_USER: "freecord",
+    POSTGRES_DB: "freecord",
+    DATABASE_PASSWORD_FILE: databasePasswordFile,
+    SESSION_SECRET_FILE: sessionSecretFile,
+  });
+
+  assert.match(config.databaseUrl ?? "", /database-password-with-%40-character/);
+  assert.equal(config.sessionSecretConfigured, true);
+});
+
+test("direct and file-backed forms of one secret cannot be combined", () => {
+  assert.throws(() => loadConfig({
+    NODE_ENV: "test",
+    SESSION_SECRET: "direct",
+    SESSION_SECRET_FILE: "/not/read",
+  }), /must not both be provided/);
 });
 
 test("object storage configuration is all-or-nothing and remains server-only", () => {

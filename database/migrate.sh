@@ -13,7 +13,9 @@ Usage:
   database/migrate.sh [--init-community NAME [--slug SLUG]]
 
 Environment:
-  DATABASE_URL  PostgreSQL connection URL or libpq connection string (required)
+  DATABASE_URL  PostgreSQL connection URL or libpq connection string
+  PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD
+                Standard libpq settings used when DATABASE_URL is absent
 
 The runner applies pending SQL files in database/migrations and verifies that
 each migration records its own version in public.schema_migrations. With
@@ -27,7 +29,10 @@ fail() {
     exit 1
 }
 
-[[ -n "${DATABASE_URL:-}" ]] || fail "DATABASE_URL is required"
+if [[ -z "${DATABASE_URL:-}" ]]; then
+    [[ -n "${PGHOST:-}" && -n "${PGUSER:-}" && -n "${PGDATABASE:-}" ]] \
+        || fail "DATABASE_URL or PGHOST, PGUSER, and PGDATABASE are required"
+fi
 command -v psql >/dev/null 2>&1 || fail "psql is required but was not found"
 [[ -d "$migrations_dir" ]] || fail "migration directory is missing: $migrations_dir"
 
@@ -78,7 +83,11 @@ sql_init_name=$(printf '%s' "$init_name" | sed "s/'/''/g")
 sql_init_slug=$(printf '%s' "$init_slug" | sed "s/'/''/g")
 
 psql_query() {
-    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atq "$@"
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+        psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atq "$@"
+    else
+        psql -X -v ON_ERROR_STOP=1 -Atq "$@"
+    fi
 }
 
 mapfile -t migration_files < <(find "$migrations_dir" -maxdepth 1 -type f -name '*.sql' -print | sort -V)
@@ -102,7 +111,11 @@ for migration in "${migration_files[@]}"; do
     fi
 
     printf 'Applying migration %s\n' "$version"
-    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+        psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+    else
+        psql -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+    fi
 
     recorded=$(psql_query -c "SELECT 1 FROM public.schema_migrations WHERE version = '$version' LIMIT 1;")
     [[ "$recorded" == '1' ]] || fail "migration $version completed without recording its version"
@@ -114,14 +127,14 @@ if [[ -n "$init_name" ]]; then
     case "$community_count" in
         0)
             printf 'Initializing the single community\n'
-            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            psql_query \
                 -c "WITH community AS (INSERT INTO public.communities (name, slug) VALUES ('$sql_init_name', '$sql_init_slug') RETURNING id), text_channel AS (INSERT INTO public.channels (community_id, name, type, position) SELECT id, 'general', 'text', 0 FROM community), voice_channel AS (INSERT INTO public.channels (community_id, name, type, position) SELECT id, 'General Voice', 'voice', 0 FROM community RETURNING id, community_id) INSERT INTO public.voice_channel_bindings (community_id, channel_id, livekit_room_id) SELECT community_id, id, 'general-voice' FROM voice_channel;" \
                 >/dev/null
             printf 'Created default channels; voice channel ID: '
             psql_query -c "SELECT id FROM public.channels WHERE type = 'voice' ORDER BY created_at, id LIMIT 1;"
             ;;
         1)
-            matches=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atq \
+            matches=$(psql_query \
                 -c "SELECT 1 FROM public.communities WHERE name = '$sql_init_name' AND slug = '$sql_init_slug';")
             [[ "$matches" == '1' ]] || fail "one community already exists with a different name or slug"
             printf 'Single community already initialized\n'

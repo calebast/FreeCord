@@ -54,6 +54,30 @@ class BootstrapConfigurationContractTests(unittest.TestCase):
         self.assertRegex(env_example, r"(?m)^FREECORD_INITIAL_ADMIN_USERNAME=admin$")
 
 
+class DesktopInviteRegistrationSafetyTests(unittest.TestCase):
+    def test_registration_validates_inputs_and_storage_before_consuming_invite(self) -> None:
+        main = source(CLIENT / "src" / "main" / "main.ts")
+        registration = main[main.index('ipcMain.handle("auth:register"'):main.index('ipcMain.handle("auth:refresh"')]
+        request = registration.index('requestJson<LoginResponse>')
+        self.assertLess(registration.index("input.password.length < 12"), request)
+        self.assertLess(registration.index("credentialStorageAvailable()"), request)
+        self.assertLess(registration.index("stageRegistrationChatKey"), request)
+
+    def test_post_registration_storage_failure_explains_that_account_exists(self) -> None:
+        main = source(CLIENT / "src" / "main" / "main.ts")
+        registration = main[main.index('ipcMain.handle("auth:register"'):main.index('ipcMain.handle("auth:refresh"')]
+        self.assertIn("accountCreated = true", registration)
+        self.assertIn("Your account was created", registration)
+        self.assertIn("Switch to Sign in", registration)
+
+    def test_composite_invite_parts_are_strictly_bounded(self) -> None:
+        main = source(CLIENT / "src" / "main" / "main.ts")
+        parser = main[main.index("function inviteParts"):main.index("function authError")]
+        self.assertGreaterEqual(parser.count("{43}"), 2)
+        self.assertIn("serverToken", parser)
+        self.assertIn("chatKey", parser)
+
+
 class InviteOnlyRegistrationContractTests(unittest.TestCase):
     def test_registration_contract_requires_invite_and_has_no_open_signup_path(self) -> None:
         contracts = source(SERVER / "contracts.ts")

@@ -187,8 +187,29 @@ async function loadOrCreateChatKey(): Promise<string> {
 
 function inviteParts(value: string): { serverToken: string; chatKey?: string } {
   const separator = value.lastIndexOf(".");
-  if (separator > 0 && value.length - separator > 20) return { serverToken: value.slice(0, separator), chatKey: value.slice(separator + 1) };
+  const serverToken = separator > 0 ? value.slice(0, separator) : value;
+  const chatKey = separator > 0 ? value.slice(separator + 1) : undefined;
+  if (/^[A-Za-z0-9_-]{43}$/.test(serverToken) && chatKey && /^[A-Za-z0-9_-]{43}$/.test(chatKey)) {
+    return { serverToken, chatKey };
+  }
   return { serverToken: value };
+}
+
+async function stageRegistrationChatKey(chatKey: string): Promise<string> {
+  if (!credentialStorageAvailable()) throw new Error("Secure credential storage is unavailable on this system.");
+  const destination = chatKeyPath();
+  const stagedPath = `${destination}.register-${randomBytes(12).toString("hex")}.tmp`;
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(stagedPath, safeStorage.encryptString(chatKey), { mode: 0o600, flag: "wx" });
+  if (process.platform !== "win32") await chmod(stagedPath, 0o600);
+  return stagedPath;
+}
+
+async function discardStagedRegistrationChatKey(stagedPath: string | null): Promise<void> {
+  if (!stagedPath) return;
+  try { await unlink(stagedPath); } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 function authError(code: AuthError["code"], message: string): AuthError {
@@ -1162,24 +1183,43 @@ app.whenReady().then(() => {
     if (!input || !input.inviteToken?.trim() || !input.username?.trim() || !input.displayName?.trim() || !input.password) {
       return authError("AUTHENTICATION_FAILED", "Enter an invitation, display name, username, and password.");
     }
+    const username = input.username.trim();
+    const displayName = input.displayName.trim();
+    if (!/^[a-z0-9][a-z0-9_.-]{2,63}$/i.test(username)) {
+      return authError("AUTHENTICATION_FAILED", "Username must be 3–64 characters and use only letters, numbers, periods, underscores, or hyphens.");
+    }
+    if (displayName.length > 100) return authError("AUTHENTICATION_FAILED", "Display name must be 100 characters or fewer.");
+    if (input.password.length < 12) return authError("AUTHENTICATION_FAILED", "Password must contain at least 12 characters.");
+    if (input.password.length > 1024) return authError("AUTHENTICATION_FAILED", "Password is too long.");
+    if (!credentialStorageAvailable()) {
+      return authError("CREDENTIAL_STORAGE_UNAVAILABLE", "Secure credential storage is unavailable. FreeCord did not consume the invitation.");
+    }
     let generation: number | null = null;
+    let stagedChatKey: string | null = null;
+    let accountCreated = false;
     try {
       await clearStoredCredentials();
       generation = authenticationGeneration;
       const invite = inviteParts(input.inviteToken.trim());
+      if (invite.chatKey) stagedChatKey = await stageRegistrationChatKey(invite.chatKey);
       const response = await requestJson<LoginResponse>(await configuredOrigin(), "/v1/auth/register", {
         method: "POST",
-        body: JSON.stringify({ inviteToken: invite.serverToken, username: input.username.trim(), displayName: input.displayName.trim(), password: input.password, deviceName: "FreeCord Desktop" }),
+        body: JSON.stringify({ inviteToken: invite.serverToken, username, displayName, password: input.password, deviceName: "FreeCord Desktop" }),
       });
-      if (invite.chatKey) {
-        await mkdir(path.dirname(chatKeyPath()), { recursive: true });
-        await writeFile(chatKeyPath(), safeStorage.encryptString(invite.chatKey), { mode: 0o600 });
+      accountCreated = true;
+      if (stagedChatKey) {
+        await rename(stagedChatKey, chatKeyPath());
+        stagedChatKey = null;
       }
       if (!await saveRefreshToken(response.refreshToken, generation) || authenticationGeneration !== generation) return { ok: true, state: currentState };
       accessToken = response.accessToken;
       return authenticated(response);
     } catch (error: unknown) {
+      try { await discardStagedRegistrationChatKey(stagedChatKey); } catch { /* Preserve the primary registration error. */ }
       if (generation === authenticationGeneration) accessToken = null;
+      if (accountCreated) {
+        return authError("CREDENTIAL_STORAGE_UNAVAILABLE", "Your account was created, but this device could not save the sign-in credentials. Switch to Sign in and use the same username and password.");
+      }
       return authError(error instanceof Error && error.name === "Unauthorized" ? "AUTHENTICATION_FAILED" : error instanceof Error && error.message.includes("Configure") ? "NO_SERVER_CONFIGURED" : "SERVER_UNAVAILABLE", error instanceof Error ? error.message : "Registration failed.");
     }
   });

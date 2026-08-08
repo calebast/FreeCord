@@ -1535,7 +1535,7 @@ function App(): React.JSX.Element {
             <input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
             {authMode === "register" && <><label htmlFor="confirm-password">Confirm password</label><input id="confirm-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" required /></>}
             <button type="submit" disabled={authBusy}>{authBusy ? "Working…" : authMode === "signin" ? "Sign in" : "Create account"}</button>
-            <p className="hint">{authMode === "signin" ? "New accounts are invite-only. Ask an owner or administrator for an invitation." : "Paste the one-time invitation token provided by an owner or administrator."}</p>
+            <p className="hint">{authMode === "signin" ? "New accounts are invite-only. Ask an owner or administrator for an invitation." : "Paste the complete one-time invitation. Usernames require 3–64 supported characters and passwords require at least 12 characters."}</p>
           </form>
         </section>}
         <p className="status" role="status" aria-live="polite">{message ?? (auth.status === "authenticated" ? "Your session is ready." : "Credentials are protected by the operating system.")}</p>

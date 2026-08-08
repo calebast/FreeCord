@@ -35,5 +35,8 @@
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "wait-on": "^8.0.3"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "4.62.4"
   }
 }

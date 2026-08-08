@@ -1,0 +1,22 @@
+# Replace both example hostnames with DNS records that point to this server.
+# The desktop client uses api.example.com as its FreeCord server address.
+api.example.com {
+    encode gzip zstd
+
+    handle /v1/* {
+        reverse_proxy 127.0.0.1:8081
+    }
+
+    handle /health {
+        reverse_proxy 127.0.0.1:8081
+    }
+
+    # FreeCord has no supported web client. Refuse every other path.
+    respond 404
+}
+
+# Set LIVEKIT_URL=wss://rtc.example.com. Caddy proxies signaling and WebSocket
+# traffic only; WebRTC media still uses the TCP/UDP ports published by Compose.
+rtc.example.com {
+    reverse_proxy 127.0.0.1:7880
+}

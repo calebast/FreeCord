@@ -1,0 +1,53 @@
+appId: com.freecord.desktop
+productName: FreeCord
+copyright: Copyright © 2026 FreeCord
+
+# Packaging is intentionally local-only. CI uploads artifacts explicitly.
+publish: null
+
+directories:
+  output: release
+  # The package project lives in apps/desktop; shared brand assets live at the
+  # repository root.
+  buildResources: ../../build
+
+files:
+  - dist/**
+  - dist-main/**
+  - package.json
+  - '!src/**'
+  - '!*.ts'
+  - '!*.yml'
+  - '!*.log'
+  - '!**/*.map'
+
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+win:
+  # Builds are currently unsigned; enable signing once a Windows certificate is available.
+  signExecutable: false
+  target:
+    - target: nsis
+    - target: dir
+  executableName: FreeCord
+  icon: icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+
+linux:
+  syncDesktopName: true
+  # Let the AppImage runtime use Chromium's sandbox whenever unprivileged user
+  # namespaces are available; do not force --no-sandbox in the desktop entry.
+  executableArgs: []
+  target:
+    - target: AppImage
+    - target: dir
+  category: AudioVideo
+  synopsis: Secure voice communication desktop client
+  description: Secure FreeCord desktop client.
+  icon: icon.png

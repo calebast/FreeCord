@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm test
+        working-directory: server
+
+  desktop-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run typecheck
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: python -m unittest discover -s tests -v
+      - run: database/validate.sh 10
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose interpolation
+        env:
+          POSTGRES_PASSWORD: ci-db-password
+          DATABASE_URL: postgresql://freecord:ci-db-password@postgres:5432/freecord
+          SESSION_SECRET: ci-session-secret-at-least-thirty-two-characters
+          LIVEKIT_URL: wss://rtc.example.invalid
+          LIVEKIT_API_KEY: ci-livekit-key
+          LIVEKIT_API_SECRET: ci-livekit-secret-at-least-thirty-two-characters
+          MINIO_ROOT_USER: ci-minio-root
+          MINIO_ROOT_PASSWORD: ci-minio-root-password-at-least-thirty-two
+          S3_ACCESS_KEY: ci-storage-key
+          S3_SECRET_KEY: ci-storage-secret-at-least-thirty-two-characters
+        run: docker compose config --quiet

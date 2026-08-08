@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible FreeCord problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include passwords, tokens, .env contents, private hostnames, IP addresses, or user data."
+  - type: input
+    id: version
+    attributes:
+      label: FreeCord version
+      placeholder: 0.8.0-alpha.1
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 10/11 x64
+        - CachyOS/Arch KDE Wayland x64
+        - Server/Docker Compose
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include expected behavior and exact reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, private addresses, and user data.
+          required: true

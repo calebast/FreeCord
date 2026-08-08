@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+.env
+.tools/
+services/.testdata/
+
+# Dependency trees and generated build/package outputs.
+**/node_modules/
+**/dist/
+**/dist-main/
+**/release/

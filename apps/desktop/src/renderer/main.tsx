@@ -189,6 +189,7 @@ function App(): React.JSX.Element {
   const voice = React.useMemo(() => new VoiceClient(), []);
   const [voiceState, setVoiceState] = React.useState<VoiceState>(voice.snapshot);
   const [runtime, setRuntime] = React.useState<string>("Loading secure desktop runtime…");
+  const [runtimePlatform, setRuntimePlatform] = React.useState<NodeJS.Platform | null>(null);
   const [settings, setSettings] = React.useState<ServerSettings | null>(null);
   const [serverOrigin, setServerOrigin] = React.useState("");
   const [allowInsecureLocalhost, setAllowInsecureLocalhost] = React.useState(false);
@@ -224,11 +225,9 @@ function App(): React.JSX.Element {
   const [screenViewerOpen, setScreenViewerOpen] = React.useState(false);
   const [screenViewerFullscreen, setScreenViewerFullscreen] = React.useState(false);
   const [selectedScreenShareId, setSelectedScreenShareId] = React.useState<string | null>(null);
-  const screenViewerRef = React.useRef<HTMLDivElement>(null);
   const [audioSettings, setAudioSettings] = React.useState<AudioSettings>({
     microphoneId: "",
     outputId: "",
-    screenAudioInputId: "",
     inputSensitivity: 0.5,
     rnnoiseEnabled: false,
     echoCancellation: true,
@@ -337,14 +336,20 @@ function App(): React.JSX.Element {
   }, [auth.status, auth.session?.id, settings?.serverOrigin]);
 
   React.useEffect(() => {
-    const updateFullscreenState = () => setScreenViewerFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener("fullscreenchange", updateFullscreenState);
-    return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
+    let active = true;
+    void window.freecord.getWindowFullscreen().then((fullscreen) => {
+      if (active) setScreenViewerFullscreen(fullscreen);
+    });
+    const stop = window.freecord.onWindowFullscreenChanged(setScreenViewerFullscreen);
+    return () => {
+      active = false;
+      stop();
+    };
   }, []);
 
   React.useEffect(() => {
     if (auth.status === "authenticated") return;
-    if (document.fullscreenElement) void document.exitFullscreen();
+    void window.freecord.setWindowFullscreen(false);
     setScreenViewerFullscreen(false);
     setScreenViewerOpen(false);
   }, [auth.status]);
@@ -418,6 +423,7 @@ function App(): React.JSX.Element {
   React.useEffect(() => {
     void Promise.all([window.freecord.getRuntimeInfo(), window.freecord.getServerSettings(), window.freecord.getSessionState(), window.freecord.getAudioSettings()]).then(([info, savedSettings, sessionState, savedAudio]) => {
       setRuntime(`FreeCord ${info.appVersion} · ${info.platform}`);
+      setRuntimePlatform(info.platform);
       setSettings(savedSettings);
       setServerOrigin(savedSettings.serverOrigin ?? "");
       setAllowInsecureLocalhost(savedSettings.allowInsecureLocalhost);
@@ -1045,23 +1051,15 @@ function App(): React.JSX.Element {
   }
 
   async function toggleScreenViewerFullscreen(): Promise<void> {
-    const viewer = screenViewerRef.current;
     try {
-      if (!screenViewerFullscreen && viewer?.requestFullscreen) {
-        await viewer.requestFullscreen();
-        return;
-      }
-      if (screenViewerFullscreen && document.fullscreenElement) {
-        await document.exitFullscreen();
-        return;
-      }
+      await window.freecord.setWindowFullscreen(!screenViewerFullscreen);
     } catch (error: unknown) {
       setMessage(error instanceof Error ? `Full screen is unavailable: ${error.message}` : "Full screen is unavailable.");
     }
   }
 
   async function closeScreenViewer(): Promise<void> {
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+    await window.freecord.setWindowFullscreen(false).catch(() => false);
     setScreenViewerFullscreen(false);
     setScreenViewerOpen(false);
   }
@@ -1407,7 +1405,7 @@ function App(): React.JSX.Element {
                 </div>}
               </div>;
             })}</div>
-            {voiceState.status !== "idle" && <div className="voice-dock"><div className="voice-dock-status"><span className="online-dot" />{voiceState.status}</div>{voiceState.error && <p className="voice-error">{voiceState.error}</p>}<div className="voice-dock-actions"><button type="button" onClick={() => void voice.setMuted(!voiceState.muted)}>{voiceState.muted ? "Unmute" : "Mute"}</button><button type="button" onClick={() => void voice.setDeafened(!voiceState.deafened)}>{voiceState.deafened ? "Undeafen" : "Deafen"}</button><button type="button" onClick={() => void voice.leave()}>Leave</button></div>{voiceState.status === "connected" && <><div className="voice-share-options"><label>Share size<select value={voiceState.screenShareSettings.resolution} onChange={(event) => updateScreenShareSetting("resolution", Number(event.target.value) as ScreenShareResolution)} disabled={voiceState.screenShareBusy}><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option></select></label><label>FPS<select value={voiceState.screenShareSettings.frameRate} onChange={(event) => updateScreenShareSetting("frameRate", Number(event.target.value) as ScreenShareFrameRate)} disabled={voiceState.screenShareBusy}><option value="30">30</option><option value="60">60</option></select></label><label>Bitrate<select value={voiceState.screenShareSettings.bitrate} onChange={(event) => updateScreenShareSetting("bitrate", Number(event.target.value) as ScreenShareBitrate)} disabled={voiceState.screenShareBusy}><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8">8 Mbps</option></select></label></div><label className="screen-audio-toggle"><input type="checkbox" checked={voiceState.screenShareAudioEnabled} onChange={(event) => voice.setScreenShareAudioEnabled(event.target.checked)} disabled={voiceState.screenShareBusy || voiceState.screenSharing} />Share desktop audio</label><button className="voice-share-button" type="button" disabled={voiceState.screenShareBusy} onClick={() => void (voiceState.screenSharing ? voice.stopScreenShare() : voice.startScreenShare())}>{voiceState.screenShareBusy ? "Starting…" : voiceState.screenSharing ? "Stop sharing" : "Share screen"}</button></>}</div>}
+            {voiceState.status !== "idle" && <div className="voice-dock"><div className="voice-dock-status"><span className="online-dot" />{voiceState.status}</div>{voiceState.error && <p className="voice-error">{voiceState.error}</p>}<div className="voice-dock-actions"><button type="button" onClick={() => void voice.setMuted(!voiceState.muted)}>{voiceState.muted ? "Unmute" : "Mute"}</button><button type="button" onClick={() => void voice.setDeafened(!voiceState.deafened)}>{voiceState.deafened ? "Undeafen" : "Deafen"}</button><button type="button" onClick={() => void voice.leave()}>Leave</button></div>{voiceState.status === "connected" && <><div className="voice-share-options"><label>Share size<select value={voiceState.screenShareSettings.resolution} onChange={(event) => updateScreenShareSetting("resolution", Number(event.target.value) as ScreenShareResolution)} disabled={voiceState.screenShareBusy}><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option></select></label><label>FPS<select value={voiceState.screenShareSettings.frameRate} onChange={(event) => updateScreenShareSetting("frameRate", Number(event.target.value) as ScreenShareFrameRate)} disabled={voiceState.screenShareBusy}><option value="30">30</option><option value="60">60</option></select></label><label>Bitrate<select value={voiceState.screenShareSettings.bitrate} onChange={(event) => updateScreenShareSetting("bitrate", Number(event.target.value) as ScreenShareBitrate)} disabled={voiceState.screenShareBusy}><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8">8 Mbps</option></select></label></div><label className="screen-audio-toggle"><input type="checkbox" checked={voiceState.screenShareAudioEnabled} onChange={(event) => voice.setScreenShareAudioEnabled(event.target.checked)} disabled={voiceState.screenShareBusy || voiceState.screenSharing} />Share desktop audio</label>{runtimePlatform === "linux" && voiceState.screenShareAudioEnabled && <p className="screen-audio-hint">In KDE audio controls, route the shared application to FreeCord_Stream_Audio.</p>}<button className="voice-share-button" type="button" disabled={voiceState.screenShareBusy} onClick={() => void (voiceState.screenSharing ? voice.stopScreenShare() : voice.startScreenShare())}>{voiceState.screenShareBusy ? "Starting…" : voiceState.screenSharing ? "Stop sharing" : "Share screen"}</button></>}</div>}
             <div className="sidebar-footer"><Avatar name={user.displayName} avatar={memberAvatar(user)} size="small" /><button className="profile-button" type="button" onClick={() => setSettingsOpen(true)}><strong>{user.username}</strong><small>{(user as AuthenticatedUser & ExtendedPrincipal).roles?.map((role) => role.name).join(", ") || user.role}</small></button><button className="icon-button" type="button" title="Open settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
           </aside>
           <section ref={chatPanelRef} className={`chat-panel ${activeView === "copyparty" ? "copyparty-active" : ""} ${activeView === "server-files" ? "server-files-active" : ""}`} aria-label={activeView === "copyparty" ? "Copyparty" : activeView === "server-files" ? "Server Files" : "Chat"}>
@@ -1489,7 +1487,7 @@ function App(): React.JSX.Element {
           <button type="button" onClick={() => { const channel = channelMenu.channel; setChannelMenu(null); void renameChannel(channel); }}>Rename channel</button>
           <button type="button" className="danger" onClick={() => { const channel = channelMenu.channel; setChannelMenu(null); void deleteChannel(channel); }}>Delete channel</button>
         </div>}
-        {screenViewerOpen && <div className={`screen-viewer-overlay ${screenViewerFullscreen ? "fullscreen" : ""}`} ref={screenViewerRef} role="dialog" aria-modal="true" aria-label="Stream viewer"><header><div><p className="eyebrow">LIVE STREAMS</p><h2>Stream viewer</h2></div><div className="screen-viewer-actions">{(streamAudioBlocked || voiceState.audioPlaybackBlocked) && <button type="button" onClick={() => void enableStreamAudio()}>Enable stream audio</button>}<button type="button" onClick={() => void toggleScreenViewerFullscreen()}>Full screen</button><button type="button" className="secondary" onClick={() => void closeScreenViewer()}>Close</button></div></header><div className="screen-viewer-layout"><nav>{voiceState.screenShares.map((share) => <button type="button" className={selectedScreenShareId === share.identity ? "selected" : ""} key={share.identity} onClick={() => { setSelectedScreenShareId(share.identity); setStreamAudioBlocked(false); }}>{share.name}'s screen</button>)}</nav><div className="screen-viewer-stage">{voiceState.screenShares.filter((share) => share.identity === selectedScreenShareId).map((share) => <ScreenShareTile share={share} selected audioEnabled={share.identity !== user.id} onAudioBlocked={() => setStreamAudioBlocked(true)} onVolumeChange={(identity, volume) => voice.setScreenShareVolume(identity, volume)} key={share.identity} />)}{!selectedScreenShareId && <p>Select a stream to view.</p>}</div></div>{screenViewerFullscreen && <button type="button" className="screen-viewer-exit-fullscreen" onClick={() => void toggleScreenViewerFullscreen()} aria-label="Exit full screen">Exit full screen</button>}</div>}
+        {screenViewerOpen && <div className={`screen-viewer-overlay ${screenViewerFullscreen ? "fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label="Stream viewer"><header><div><p className="eyebrow">LIVE STREAMS</p><h2>Stream viewer</h2></div><div className="screen-viewer-actions">{(streamAudioBlocked || voiceState.audioPlaybackBlocked) && <button type="button" onClick={() => void enableStreamAudio()}>Enable stream audio</button>}<button type="button" onClick={() => void toggleScreenViewerFullscreen()}>Full screen</button><button type="button" className="secondary" onClick={() => void closeScreenViewer()}>Close</button></div></header><div className="screen-viewer-layout"><nav>{voiceState.screenShares.map((share) => <button type="button" className={selectedScreenShareId === share.identity ? "selected" : ""} key={share.identity} onClick={() => { setSelectedScreenShareId(share.identity); setStreamAudioBlocked(false); }}>{share.name}'s screen</button>)}</nav><div className="screen-viewer-stage">{voiceState.screenShares.filter((share) => share.identity === selectedScreenShareId).map((share) => <ScreenShareTile share={share} selected audioEnabled={share.identity !== user.id} onAudioBlocked={() => setStreamAudioBlocked(true)} onVolumeChange={(identity, volume) => voice.setScreenShareVolume(identity, volume)} key={share.identity} />)}{!selectedScreenShareId && <p>Select a stream to view.</p>}</div></div>{screenViewerFullscreen && <button type="button" className="screen-viewer-exit-fullscreen" onClick={() => void toggleScreenViewerFullscreen()} aria-label="Exit full screen">Exit full screen</button>}</div>}
         {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="FreeCord settings"><section className="settings-panel"><div className="settings-header"><div><p className="eyebrow">FREECORD SETTINGS</p><h2>Settings</h2></div><button className="secondary" type="button" onClick={() => setSettingsOpen(false)}>Close</button></div><div className="settings-layout"><nav className="settings-tabs" aria-label="Settings sections"><button type="button" className={settingsTab === "profile" ? "active" : ""} onClick={() => setSettingsTab("profile")}><strong>Profile</strong><small>Identity and account</small></button><button type="button" className={settingsTab === "audio" ? "active" : ""} onClick={() => setSettingsTab("audio")}><strong>Voice &amp; Audio</strong><small>Devices and sensitivity</small></button>{canAccessAdmin && <button type="button" className={settingsTab === "admin" ? "active" : ""} onClick={() => setSettingsTab("admin")}><strong>Admin</strong><small>Members, roles, channels</small></button>}{canViewAudit && <button type="button" className={settingsTab === "audit" ? "active" : ""} onClick={() => setSettingsTab("audit")}><strong>Audit log</strong><small>Administrative activity</small></button>}<button type="button" className="settings-support-link" onClick={() => void window.freecord.openSupportPage()}><strong>☕ Buy me a coffee</strong><small>Support FreeCord</small></button></nav><div className="settings-scroll">
           {settingsTab === "profile" && <><div className="settings-section"><h3>Profile</h3><form className="profile-name-form" onSubmit={(event) => void saveProfile(event)}><label>Display name<input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={100} autoComplete="name" /></label><button type="submit" disabled={profileBusy || !profileDisplayName.trim() || profileDisplayName.trim() === user.displayName}>Save display name</button></form><div className="profile-avatar-settings"><Avatar name={user.displayName} avatar={memberAvatar(user)} /><label className="upload-button">Upload profile picture<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAvatar(file); event.currentTarget.value = ""; }} /></label>{memberAvatar(user) && <button type="button" className="secondary" onClick={() => void window.freecord.removeMyAvatar().then((result) => { if ("userId" in result) { setAuth((current) => current.user ? { ...current, user: { ...current.user, avatar: undefined } } : current); setMembers((current) => current.map((member) => member.id === user.id ? { ...member, avatar: undefined } : member)); setMessage("Profile picture removed."); } else setMessage(result.message); })}>Remove</button>}</div><label>Status<select value={user.status} onChange={(event) => void changeStatus(event.target.value as "active" | "busy" | "away")}><option value="active">Active</option><option value="busy">Busy</option><option value="away">Away</option></select></label><div className="assigned-roles"><span>Assigned roles</span><div>{assignedRoles.length ? assignedRoles.map((role) => <span className="role-chip" key={role.id}>{role.name}</span>) : <span className="role-chip">{user.role}</span>}</div></div></div><div className="settings-section"><h3>Change password</h3><form className="password-form" onSubmit={(event) => void changeProfilePassword(event)}><label>Current password<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label><label>New password<input type="password" value={newProfilePassword} onChange={(event) => setNewProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><label>Confirm new password<input type="password" value={confirmProfilePassword} onChange={(event) => setConfirmProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><button type="submit" disabled={profileBusy || !currentPassword || newProfilePassword.length < 12 || !confirmProfilePassword}>Change password</button></form><p className="hint">Changing your password signs out your other FreeCord sessions.</p></div></>}
           {settingsTab === "audio" && <>
@@ -1497,8 +1495,7 @@ function App(): React.JSX.Element {
               <h3>Voice &amp; Audio</h3>
               <label>Microphone<select value={audioSettings.microphoneId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, microphoneId: event.target.value })}><option value="">System default</option>{voiceState.microphoneDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
               <label>Speaker<select value={audioSettings.outputId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, outputId: event.target.value })}><option value="">System default</option>{voiceState.outputDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
-              <label>Desktop audio source<select value={audioSettings.screenAudioInputId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, screenAudioInputId: event.target.value })}><option value="">Auto-detect PipeWire/Pulse monitor</option>{voiceState.screenAudioDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
-              <p className="hint">For Linux stream audio, select the monitor source for your speakers or output sink. This track bypasses all microphone processing.</p>
+              <div className="settings-info"><strong>Linux PipeWire stream audio</strong><p className="hint">While sharing, route the game or application to the FreeCord_Stream_Audio output in KDE's volume controls. FreeCord voice remains on your normal speaker and is excluded from the stream.</p></div>
               <label>Input sensitivity<input type="range" min="0" max="1" step="0.01" value={audioSettings.inputSensitivity} onChange={(event) => void saveAudioPreferences({ ...audioSettings, inputSensitivity: Number(event.target.value) })} /></label>
               <p className="hint">Device IDs are stored locally and automatically fall back to the system default if a device is disconnected.</p>
             </div>

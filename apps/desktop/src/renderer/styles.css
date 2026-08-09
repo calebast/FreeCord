@@ -138,6 +138,7 @@ small { display: block; margin-top: 22px; color: #858995; }
 .voice-share-options label { color: #858995; font-size: 9px; font-weight: 700; }
 .voice-share-options select { margin-top: 3px; padding: 5px 3px; border-radius: 5px; font-size: 10px; }
 .voice-share-button { width: 100%; margin-top: 7px; padding: 7px 4px; border-radius: 5px; color: #d2d6e0; background: #303746; font-size: 10px; }
+.screen-audio-hint { margin: 5px 0 0; color: #aeb7cc; font-size: 9px; line-height: 1.35; }
 .settings-overlay { position: absolute; inset: 58px 0 30px; z-index: 5; min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; padding: 24px; background: rgb(8 10 15 / 72%); }
 .settings-panel { width: min(100%, 880px); max-height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); border: 1px solid #3a4152; border-radius: 14px; background: #171a22; box-shadow: 0 24px 80px rgb(0 0 0 / 45%); }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid #2d3342; }
@@ -157,6 +158,8 @@ small { display: block; margin-top: 22px; color: #858995; }
 .settings-section { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid #2d3342; }
 .settings-section h3 { margin: 0 0 3px; color: #fff; font-size: 14px; }
 .settings-section label { display: grid; gap: 5px; color: #c9cbd1; font-size: 12px; }
+.settings-info { padding: 10px; border: 1px solid #33405e; border-radius: 8px; background: #171c27; }
+.settings-info strong { color: #e8ebf4; font-size: 12px; }
 .settings-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .settings-title-row .hint { margin-top: 5px; }
 .settings-toggle { grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px !important; padding: 10px 11px; border: 1px solid #2d3342; border-radius: 9px; background: #14171e; cursor: pointer; }

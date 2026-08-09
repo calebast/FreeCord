@@ -16,6 +16,9 @@ import {
 import type { AudioSettings, VoiceTokenResponse } from "../shared/bridge";
 import { FreeCordRnnoiseProcessor } from "./rnnoise-processor";
 import { LocalSpeakingSignal, RemoteSpeakingSignals, SPEAKING_SIGNAL_TOPIC } from "./speaking-signal";
+// Keep this as a packaged same-origin asset. A data: URL would be rejected by
+// the renderer's strict script-src policy when AudioWorklet loads the module.
+import pipewireScreenAudioWorkletUrl from "./pipewire-screen-audio-worklet.js?url&no-inline";
 
 export type VoiceStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 
@@ -61,10 +64,8 @@ export interface VoiceState {
   speaking: boolean;
   microphoneDevices: VoiceDevice[];
   outputDevices: VoiceDevice[];
-  screenAudioDevices: VoiceDevice[];
   selectedMicrophoneId: string;
   selectedOutputId: string;
-  selectedScreenAudioInputId: string;
   rnnoiseActive: boolean;
   audioProcessingBusy: boolean;
   audioProcessingError: string | null;
@@ -84,8 +85,8 @@ const defaultScreenShareSettings: ScreenShareSettings = { resolution: 1080, fram
 
 const initialState: VoiceState = {
   status: "idle", channelId: null, error: null, muted: false, deafened: false,
-  speaking: false, microphoneDevices: [], outputDevices: [], screenAudioDevices: [], selectedMicrophoneId: "",
-  selectedOutputId: "", selectedScreenAudioInputId: "", rnnoiseActive: false, audioProcessingBusy: false,
+  speaking: false, microphoneDevices: [], outputDevices: [], selectedMicrophoneId: "",
+  selectedOutputId: "", rnnoiseActive: false, audioProcessingBusy: false,
   audioProcessingError: null, participants: [], screenSharing: false, screenShareBusy: false,
   screenSharePhase: "idle", screenShareAudioEnabled: true, screenShareWarning: null,
   audioPlaybackBlocked: false, audioPlaybackWarning: null,
@@ -96,12 +97,6 @@ function normalizeLiveKitUrl(value: string): string {
   const url = new URL(value);
   if (url.pathname === "/rtc" || url.pathname === "/rtc/") url.pathname = "/";
   return url.toString().replace(/\/$/, "");
-}
-
-function isDesktopAudioDevice(device: MediaDeviceInfo, microphoneId: string): boolean {
-  return device.kind === "audioinput"
-    && device.deviceId !== microphoneId
-    && /(monitor(?: of)?|loopback|stereo mix|what u hear|output.*capture|desktop audio)/i.test(device.label);
 }
 
 export class VoiceClient {
@@ -128,10 +123,13 @@ export class VoiceClient {
   private screenSharePhase: ScreenSharePhase = "idle";
   private ownedScreenVideoTrack: LocalVideoTrack | null = null;
   private ownedScreenAudioTrack: LocalAudioTrack | null = null;
+  private pipewireAudioContext: AudioContext | null = null;
+  private pipewireAudioNode: AudioWorkletNode | null = null;
+  private stopPipewireAudioData: (() => void) | null = null;
+  private stopPipewireAudioErrors: (() => void) | null = null;
   private audioPreferences: AudioSettings = {
     microphoneId: "",
     outputId: "",
-    screenAudioInputId: "",
     inputSensitivity: 0.5,
     rnnoiseEnabled: false,
     echoCancellation: true,
@@ -155,10 +153,8 @@ export class VoiceClient {
       this.update({
         microphoneDevices: microphones,
         outputDevices: speakers,
-        screenAudioDevices: inputs.filter((device) => isDesktopAudioDevice(device, this.audioPreferences.microphoneId)).map((device) => ({ deviceId: device.deviceId, label: device.label })),
         selectedMicrophoneId: this.state.selectedMicrophoneId || microphones[0]?.deviceId || "",
         selectedOutputId: this.state.selectedOutputId || speakers[0]?.deviceId || "",
-        selectedScreenAudioInputId: this.audioPreferences.screenAudioInputId,
       });
     } catch (error: unknown) { this.update({ error: error instanceof Error ? error.message : "Audio devices are unavailable." }); }
   }
@@ -203,13 +199,14 @@ export class VoiceClient {
     this.remoteSpeakingSignals.clearAll();
     const ownedScreenTracks = this.takeOwnedScreenTracks();
     if (room) await this.releaseScreenTracks(room, ownedScreenTracks);
+    await this.releasePipeWireAudioCapture();
     this.audioTracks.forEach((track) => track.detach());
     this.audioTracks.clear();
     if (room) await room.disconnect();
     this.room = null;
     this.speakingDataAllowed = false;
     this.screenSharePhase = "idle";
-    this.update({ ...initialState, microphoneDevices: this.state.microphoneDevices, outputDevices: this.state.outputDevices, screenAudioDevices: this.state.screenAudioDevices, selectedScreenAudioInputId: this.audioPreferences.screenAudioInputId });
+    this.update({ ...initialState, microphoneDevices: this.state.microphoneDevices, outputDevices: this.state.outputDevices });
   }
 
   async setMuted(muted: boolean): Promise<void> {
@@ -259,6 +256,7 @@ export class VoiceClient {
           autoGainControl: false,
           noiseSuppression: false,
           voiceIsolation: false,
+          restrictOwnAudio: true,
         } : false,
         resolution: { ...dimensions, frameRate: settings.frameRate },
         contentHint: "detail",
@@ -277,9 +275,19 @@ export class VoiceClient {
         try {
           audioTrack = await this.captureDesktopAudioInput();
           if (audioTrack) capturedTracks.push(audioTrack);
-          else desktopAudioCaptureWarning = "No PipeWire/Pulse monitor source was found. Select a desktop-audio source in Voice & Audio settings.";
+          else desktopAudioCaptureWarning = "The dedicated PipeWire stream-audio source did not return an audio track.";
         } catch (error: unknown) {
           desktopAudioCaptureWarning = error instanceof Error ? error.message : "The desktop-audio source could not be captured.";
+        }
+      }
+      if (audioTrack && /Windows/i.test(navigator.userAgent)) {
+        const settings = audioTrack.mediaStreamTrack.getSettings() as MediaTrackSettings & { restrictOwnAudio?: boolean };
+        if (settings.restrictOwnAudio !== true) {
+          const unsafeAudioTrack = audioTrack;
+          capturedTracks = capturedTracks.filter((track) => track !== unsafeAudioTrack);
+          await this.releaseScreenTracks(room, [unsafeAudioTrack]);
+          audioTrack = undefined;
+          desktopAudioCaptureWarning = "FreeCord voice isolation was unavailable, so desktop audio was disabled to prevent call audio from echoing into the stream.";
         }
       }
       if (!this.isCurrentScreenShareOperation(room, generation)) {
@@ -340,6 +348,7 @@ export class VoiceClient {
       this.refreshScreenShares();
     } catch (error: unknown) {
       await this.releaseScreenTracks(room, capturedTracks);
+      await this.releasePipeWireAudioCapture();
       if (!this.isCurrentScreenShareOperation(room, generation)) return;
       this.ownedScreenVideoTrack = null;
       this.ownedScreenAudioTrack = null;
@@ -364,11 +373,13 @@ export class VoiceClient {
     const tracks = this.takeOwnedScreenTracks();
     try {
       await this.releaseScreenTracks(room, tracks);
+      await this.releasePipeWireAudioCapture();
       if (!this.isCurrentScreenShareOperation(room, generation)) return;
       this.setScreenSharePhase("idle");
       this.update({ screenSharing: false, screenShareBusy: false, screenShareWarning: null });
       this.refreshScreenShares();
     } catch (error: unknown) {
+      await this.releasePipeWireAudioCapture();
       if (!this.isCurrentScreenShareOperation(room, generation)) return;
       this.setScreenSharePhase("idle");
       this.update({
@@ -403,7 +414,7 @@ export class VoiceClient {
   setAudioPreferences(settings: AudioSettings): void {
     this.audioPreferences = { ...settings };
     this.localSpeakingSignal.setSensitivity(settings.inputSensitivity);
-    this.update({ selectedMicrophoneId: settings.microphoneId, selectedOutputId: settings.outputId, selectedScreenAudioInputId: settings.screenAudioInputId });
+    this.update({ selectedMicrophoneId: settings.microphoneId, selectedOutputId: settings.outputId });
   }
 
   async applyAudioProcessingPreferences(): Promise<void> {
@@ -485,30 +496,50 @@ export class VoiceClient {
   }
 
   private async captureDesktopAudioInput(): Promise<LocalAudioTrack | undefined> {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const inputs = devices.filter((device) => isDesktopAudioDevice(device, this.audioPreferences.microphoneId));
-    const configuredId = this.audioPreferences.screenAudioInputId;
-    const selected = configuredId
-      ? inputs.find((device) => device.deviceId === configuredId)
-      : inputs.find((device) => /(monitor(?: of)?|stereo mix|what u hear|output.*capture|desktop audio)/i.test(device.label));
-    if (!selected) {
-      if (configuredId) throw new Error("The selected desktop-audio source is no longer available.");
-      return undefined;
+    const prepared = await window.freecord.prepareLinuxScreenAudio();
+    if (!prepared.ok) throw new Error(prepared.message);
+    try {
+      const audioContext = new AudioContext({ latencyHint: "interactive", sampleRate: 48_000 });
+      if (audioContext.sampleRate !== 48_000) throw new Error(`PipeWire stream audio requires 48 kHz playback (received ${audioContext.sampleRate} Hz).`);
+      await audioContext.audioWorklet.addModule(pipewireScreenAudioWorkletUrl);
+      const source = new AudioWorkletNode(audioContext, "freecord-pipewire-source", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      const destination = audioContext.createMediaStreamDestination();
+      source.connect(destination);
+      this.stopPipewireAudioData = window.freecord.onLinuxScreenAudioData((chunk) => source.port.postMessage(chunk, [chunk]));
+      this.stopPipewireAudioErrors = window.freecord.onLinuxScreenAudioError((message) => {
+        this.update({ screenShareWarning: message, error: message });
+      });
+      await audioContext.resume();
+      const mediaTrack = destination.stream.getAudioTracks()[0];
+      if (!mediaTrack) throw new Error("PipeWire did not produce a stream-audio track.");
+      this.pipewireAudioContext = audioContext;
+      this.pipewireAudioNode = source;
+      return new LocalAudioTrack(mediaTrack, {
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: false,
+      }, true);
+    } catch (error: unknown) {
+      await this.releasePipeWireAudioCapture();
+      throw error;
     }
+  }
 
-    const constraints: MediaTrackConstraints = {
-      deviceId: { exact: selected.deviceId },
-      echoCancellation: false,
-      autoGainControl: false,
-      noiseSuppression: false,
-    };
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-    const mediaTrack = stream.getAudioTracks()[0];
-    if (!mediaTrack) {
-      stream.getTracks().forEach((track) => track.stop());
-      throw new Error("The selected desktop-audio source did not provide an audio track.");
-    }
-    return new LocalAudioTrack(mediaTrack, constraints, true);
+  private async releasePipeWireAudioCapture(): Promise<void> {
+    this.stopPipewireAudioData?.();
+    this.stopPipewireAudioErrors?.();
+    this.stopPipewireAudioData = null;
+    this.stopPipewireAudioErrors = null;
+    this.pipewireAudioNode?.disconnect();
+    this.pipewireAudioNode = null;
+    const audioContext = this.pipewireAudioContext;
+    this.pipewireAudioContext = null;
+    if (audioContext && audioContext.state !== "closed") await audioContext.close().catch(() => undefined);
+    await window.freecord.releaseLinuxScreenAudio().catch(() => undefined);
   }
 
   private microphoneTrack(): LocalAudioTrack | null {
@@ -550,11 +581,13 @@ export class VoiceClient {
           this.screenSharePhase = "idle";
           const remainingTracks = this.takeOwnedScreenTracks();
           void this.releaseScreenTracks(room, remainingTracks);
+          void this.releasePipeWireAudioCapture();
           this.update({ screenSharing: false, screenShareBusy: false, screenSharePhase: "idle" });
         } else if (publication.source === Track.Source.ScreenShareAudio && stillSharing && this.screenSharePhase === "active" && this.state.screenShareAudioEnabled) {
           const endedAudioTrack = this.ownedScreenAudioTrack;
           this.ownedScreenAudioTrack = null;
           if (endedAudioTrack) void this.releaseScreenTracks(room, [endedAudioTrack]);
+          void this.releasePipeWireAudioCapture();
           const warning = "Screen video is live, but the desktop-audio publication ended.";
           this.update({ screenShareWarning: warning, error: warning });
         }
@@ -609,6 +642,7 @@ export class VoiceClient {
     eventRoom.on(RoomEvent.Disconnected, () => {
       const orphanedScreenTracks = this.takeOwnedScreenTracks();
       if (orphanedScreenTracks.length > 0) void this.releaseScreenTracks(room, orphanedScreenTracks);
+      void this.releasePipeWireAudioCapture();
       void this.localSpeakingSignal.stop(false);
       this.localSpeakingHint = false;
       this.remoteSpeakingSignals.clearAll();

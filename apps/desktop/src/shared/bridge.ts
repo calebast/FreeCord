@@ -28,13 +28,16 @@ export interface SettingsError {
 export interface AudioSettings {
   microphoneId: string;
   outputId: string;
-  screenAudioInputId: string;
   inputSensitivity: number;
   rnnoiseEnabled: boolean;
   echoCancellation: boolean;
   automaticGainControl: boolean;
   nativeNoiseSuppression: boolean;
 }
+
+export type LinuxScreenAudioResult =
+  | { ok: true; outputName: string }
+  | { ok: false; message: string };
 
 export interface AuthenticatedUser {
   id: string;
@@ -353,6 +356,13 @@ export interface AuthResult {
 export interface FreeCordBridge {
   getRuntimeInfo(): Promise<RuntimeInfo>;
   openSupportPage(): Promise<{ ok: true }>;
+  getWindowFullscreen(): Promise<boolean>;
+  setWindowFullscreen(fullscreen: boolean): Promise<void>;
+  onWindowFullscreenChanged(listener: (fullscreen: boolean) => void): () => void;
+  prepareLinuxScreenAudio(): Promise<LinuxScreenAudioResult>;
+  releaseLinuxScreenAudio(): Promise<void>;
+  onLinuxScreenAudioData(listener: (chunk: ArrayBuffer) => void): () => void;
+  onLinuxScreenAudioError(listener: (message: string) => void): () => void;
   getServerSettings(): Promise<ServerSettings>;
   saveServerSettings(input: ServerSettingsInput): Promise<SettingsResult | SettingsError>;
   clearServerSettings(): Promise<SettingsResult | SettingsError>;

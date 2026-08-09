@@ -3,11 +3,13 @@ import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   RuntimeInfo,
   ServerSettings,
   ServerSettingsInput,
   AudioSettings,
+  LinuxScreenAudioResult,
   SettingsError,
   SettingsResult,
   AuthError,
@@ -70,6 +72,9 @@ let mainWindow: BrowserWindow | null = null;
 let filesView: WebContentsView | null = null;
 let filesSurfaceVisible = false;
 let filesSurfaceGeneration = 0;
+const linuxScreenAudioSinkName = `freecord_stream_audio_${process.pid}`;
+const linuxScreenAudioOutputName = "FreeCord_Stream_Audio";
+let linuxScreenAudioState: { sinkModuleId: string; loopbackModuleId: string; recorder: ChildProcessWithoutNullStreams | null } | null = null;
 
 const appRoot = path.resolve(__dirname, "../..");
 const rendererRoot = path.join(appRoot, "dist");
@@ -134,7 +139,6 @@ function audioSettingsPath(): string { return path.join(app.getPath("userData"),
 const defaultAudioSettings: AudioSettings = {
   microphoneId: "",
   outputId: "",
-  screenAudioInputId: "",
   inputSensitivity: 0.5,
   rnnoiseEnabled: false,
   echoCancellation: true,
@@ -148,7 +152,6 @@ async function loadAudioSettings(): Promise<AudioSettings> {
     return {
       microphoneId: typeof value.microphoneId === "string" ? value.microphoneId.slice(0, 512) : "",
       outputId: typeof value.outputId === "string" ? value.outputId.slice(0, 512) : "",
-      screenAudioInputId: typeof value.screenAudioInputId === "string" ? value.screenAudioInputId.slice(0, 512) : "",
       inputSensitivity: typeof value.inputSensitivity === "number" && Number.isFinite(value.inputSensitivity) ? Math.max(0, Math.min(1, value.inputSensitivity)) : 0.5,
       rnnoiseEnabled: value.rnnoiseEnabled === true,
       echoCancellation: value.echoCancellation !== false,
@@ -162,7 +165,6 @@ async function saveAudioSettings(settings: AudioSettings): Promise<AudioSettings
   const normalized: AudioSettings = {
     microphoneId: typeof settings.microphoneId === "string" ? settings.microphoneId.slice(0, 512) : "",
     outputId: typeof settings.outputId === "string" ? settings.outputId.slice(0, 512) : "",
-    screenAudioInputId: typeof settings.screenAudioInputId === "string" ? settings.screenAudioInputId.slice(0, 512) : "",
     inputSensitivity: typeof settings.inputSensitivity === "number" && Number.isFinite(settings.inputSensitivity) ? Math.max(0, Math.min(1, settings.inputSensitivity)) : 0.5,
     rnnoiseEnabled: settings.rnnoiseEnabled === true,
     echoCancellation: settings.echoCancellation !== false,
@@ -172,6 +174,94 @@ async function saveAudioSettings(settings: AudioSettings): Promise<AudioSettings
   await mkdir(path.dirname(audioSettingsPath()), { recursive: true });
   await writeFile(audioSettingsPath(), `${JSON.stringify(normalized)}\n`, { encoding: "utf8", mode: 0o600 });
   return normalized;
+}
+
+function runPactl(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("pactl", args, { encoding: "utf8", timeout: 5_000, maxBuffer: 256 * 1024 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+function validPulseObjectName(value: string): boolean {
+  return /^[A-Za-z0-9._-]{1,128}$/.test(value);
+}
+
+async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
+  if (process.platform !== "linux") return { ok: false, message: "Dedicated PipeWire stream audio is only used on Linux." };
+  try {
+    if (!linuxScreenAudioState) {
+      const defaultSink = await runPactl(["get-default-sink"]);
+      if (!validPulseObjectName(defaultSink)) throw new Error("The default PipeWire output is invalid.");
+      const sinkModuleId = await runPactl([
+        "load-module",
+        "module-null-sink",
+        `sink_name=${linuxScreenAudioSinkName}`,
+        `sink_properties=device.description=${linuxScreenAudioOutputName}`,
+        "rate=48000",
+        "channels=2",
+      ]);
+      if (!/^\d+$/.test(sinkModuleId)) throw new Error("PipeWire did not create the stream-audio output.");
+      try {
+        const loopbackModuleId = await runPactl([
+          "load-module",
+          "module-loopback",
+          `source=${linuxScreenAudioSinkName}.monitor`,
+          `sink=${defaultSink}`,
+          "latency_msec=30",
+        ]);
+        if (!/^\d+$/.test(loopbackModuleId)) throw new Error("PipeWire did not create the stream-audio monitor.");
+        linuxScreenAudioState = { sinkModuleId, loopbackModuleId, recorder: null };
+      } catch (error: unknown) {
+        await runPactl(["unload-module", sinkModuleId]).catch(() => undefined);
+        throw error;
+      }
+    }
+
+    if (!linuxScreenAudioState.recorder) {
+      const recorder = spawn("pw-record", [
+        "--record",
+        "--raw",
+        "--rate=48000",
+        "--format=s16",
+        "--channels=2",
+        "--channel-map=stereo",
+        "--latency=20ms",
+        `--target=${linuxScreenAudioSinkName}.monitor`,
+        "-",
+      ], { stdio: ["pipe", "pipe", "pipe"] });
+      linuxScreenAudioState.recorder = recorder;
+      recorder.stdin.end();
+      recorder.stdout.on("data", (chunk: Buffer) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("audio:linux-screen-data", Buffer.from(chunk));
+      });
+      recorder.stderr.on("data", (chunk: Buffer) => console.error("FreeCord PipeWire capture", chunk.toString("utf8").trim()));
+      recorder.once("exit", (code) => {
+        if (linuxScreenAudioState?.recorder === recorder) linuxScreenAudioState.recorder = null;
+        if (code && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("audio:linux-screen-error", "PipeWire stream-audio capture stopped unexpectedly.");
+      });
+      await new Promise<void>((resolve, reject) => {
+        recorder.once("spawn", resolve);
+        recorder.once("error", reject);
+      });
+    }
+    return { ok: true, outputName: linuxScreenAudioOutputName };
+  } catch (error: unknown) {
+    console.error("FreeCord could not prepare isolated Linux stream audio", error);
+    await releaseLinuxScreenAudio();
+    return { ok: false, message: "PipeWire stream audio could not start. Install pipewire-pulse, libpulse (pactl), and PipeWire tools (pw-record), then restart FreeCord." };
+  }
+}
+
+async function releaseLinuxScreenAudio(): Promise<void> {
+  const state = linuxScreenAudioState;
+  if (!state) return;
+  linuxScreenAudioState = null;
+  if (state.recorder && !state.recorder.killed) state.recorder.kill("SIGTERM");
+  await runPactl(["unload-module", state.loopbackModuleId]).catch(() => undefined);
+  await runPactl(["unload-module", state.sinkModuleId]).catch(() => undefined);
 }
 
 async function loadOrCreateChatKey(): Promise<string> {
@@ -1036,6 +1126,18 @@ function createWindow(): void {
   mainWindow.webContents.on("will-redirect", (event, url) => {
     if (!isAllowedNavigation(url)) event.preventDefault();
   });
+  const publishFullscreenState = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("window:fullscreen-changed", mainWindow.isFullScreen());
+  };
+  mainWindow.on("enter-full-screen", publishFullscreenState);
+  mainWindow.on("leave-full-screen", publishFullscreenState);
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.key === "Escape" && mainWindow?.isFullScreen()) {
+      event.preventDefault();
+      mainWindow.setFullScreen(false);
+    }
+  });
+  mainWindow.webContents.on("render-process-gone", () => mainWindow?.setFullScreen(false));
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     if (errorCode === -3) return;
     const message = `FreeCord could not load its interface (${errorCode}: ${errorDescription}).`;
@@ -1064,6 +1166,7 @@ function createWindow(): void {
 
   mainWindow.on("closed", () => {
     stopRealtimeConnection();
+    void releaseLinuxScreenAudio();
     void destroyFilesSurface();
     mainWindow = null;
   });
@@ -1120,6 +1223,13 @@ app.whenReady().then(() => {
     await shell.openExternal(supportUrl);
     return { ok: true };
   });
+  ipcMain.handle("window:get-fullscreen", (): boolean => mainWindow?.isFullScreen() === true);
+  ipcMain.handle("window:set-fullscreen", (_event, fullscreen: unknown): void => {
+    if (!mainWindow || typeof fullscreen !== "boolean") throw new TypeError("Fullscreen state must be a boolean.");
+    mainWindow.setFullScreen(fullscreen);
+  });
+  ipcMain.handle("audio:prepare-linux-screen", (): Promise<LinuxScreenAudioResult> => ensureLinuxScreenAudio());
+  ipcMain.handle("audio:release-linux-screen", (): Promise<void> => releaseLinuxScreenAudio());
   ipcMain.handle("settings:get-server", (): Promise<ServerSettings> => loadSettings());
   ipcMain.handle("settings:get-audio", (): Promise<AudioSettings> => loadAudioSettings());
   ipcMain.handle("settings:save-audio", async (_event, input: unknown): Promise<AudioSettings> => saveAudioSettings((input && typeof input === "object" ? input : {}) as AudioSettings));

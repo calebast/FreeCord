@@ -4,6 +4,12 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.4 - 2026-08-09
+
+- Restored native Electron fullscreen with synchronized compositor/window events.
+- Replaced unreliable Chromium monitor-device discovery on Linux with an isolated PipeWire stream-audio sink and `pw-record` bridge.
+- Excluded FreeCord participant audio from screen streams on Linux and made Windows screen audio fail closed when own-app isolation is unavailable.
+
 ## 0.8.0-alpha.3 - 2026-08-09
 
 - Moved channel rename and deletion into an administrator-only right-click menu.

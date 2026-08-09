@@ -20,13 +20,24 @@ class DesktopAuthBridgeInvariantTests(unittest.TestCase):
         self.bridge = read(DESKTOP / "src/shared/bridge.ts")
         self.main = read(DESKTOP / "src/main/main.ts")
 
-    def test_auth_bridge_is_allowlisted_with_one_typed_realtime_listener(self) -> None:
+    def test_auth_bridge_uses_only_explicit_typed_listener_channels(self) -> None:
         self.assertIn("contextBridge.exposeInMainWorld", self.preload)
         self.assertNotRegex(self.preload, r"ipcRenderer\.(?:send|sendSync|once)")
         self.assertEqual(1, self.preload.count('ipcRenderer.on("realtime:event", wrapped)'))
         self.assertEqual(1, self.preload.count('ipcRenderer.removeListener("realtime:event", wrapped)'))
         self.assertIn("onRealtimeEvent(listener:", self.bridge)
-        self.assertNotRegex(self.preload, r"ipcRenderer\.on\((?!\"realtime:event\")")
+        listener_channels = re.findall(r'ipcRenderer\.on\("([^"]+)", wrapped\)', self.preload)
+        remove_channels = re.findall(r'ipcRenderer\.removeListener\("([^"]+)", wrapped\)', self.preload)
+        self.assertEqual(
+            {
+                "realtime:event",
+                "window:fullscreen-changed",
+                "audio:linux-screen-data",
+                "audio:linux-screen-error",
+            },
+            set(listener_channels),
+        )
+        self.assertEqual(Counter(listener_channels), Counter(remove_channels))
         channels = re.findall(r'ipcRenderer\.invoke\("([^"]+)"', self.preload)
         self.assertTrue(channels, "The preload must expose a concrete IPC surface")
         duplicates = {channel for channel, count in Counter(channels).items() if count > 1}
@@ -38,7 +49,7 @@ class DesktopAuthBridgeInvariantTests(unittest.TestCase):
         for channel in channels:
             self.assertRegex(
                 channel,
-                r"^(?:auth|chat|community|files|media|profile|runtime|settings|voice|window):[a-z0-9-]+$",
+                r"^(?:audio|auth|chat|community|files|media|profile|runtime|settings|voice|window):[a-z0-9-]+$",
             )
         self.assertNotRegex(self.preload, r"(?:accessToken|refreshToken|Bearer|LIVEKIT_API_SECRET|SESSION_SECRET)")
 

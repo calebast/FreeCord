@@ -6,7 +6,7 @@
 
 FreeCord is a self-hosted desktop community app for persistent text chat, low-latency voice, screen sharing, roles, and file sharing. One FreeCord installation hosts one private community. The desktop client is built with Electron, React, and TypeScript; the server uses Node.js, PostgreSQL, LiveKit, and MinIO.
 
-> **Early alpha:** FreeCord `0.8.0-alpha.10` is intended for hands-on testing. Installers are unsigned, upgrades may require manual work, and the project has not received an independent security audit.
+> **Early alpha:** FreeCord `0.8.0-alpha.11` is intended for hands-on testing. Installers are unsigned, upgrades may require manual work, and the project has not received an independent security audit.
 
 [Download the latest release](https://github.com/calebast/FreeCord/releases/latest) · [Deployment guide](docs/DEPLOYMENT.md) · [Configuration reference](docs/CONFIGURATION.md) · [Support FreeCord](https://buymeacoffee.com/calebast)
 
@@ -15,6 +15,7 @@ FreeCord is a self-hosted desktop community app for persistent text chat, low-la
 - Invite-only accounts with an initial owner, refresh-token rotation, roles, permissions, account recovery, and audit events
 - Persistent channels, encrypted text messages, edits, deletion, mentions, reactions, custom emotes, GIF search, local decrypted search, and pagination
 - LiveKit voice channels with device selection, mute, deafen, voice activity, per-user volume, RNNoise, echo cancellation, and reconnect handling
+- Permission-filtered voice channel rosters are visible before joining; speaking indicators become live after joining the selected channel
 - Screen sharing with selectable quality, frame rate, bitrate, multi-stream viewing, and stream volume controls where the operating system exposes capture audio
 - Avatars, presence, shared-file browsing, image/audio/video attachments, and an optional isolated Copyparty surface
 - Docker Compose deployment with PostgreSQL, LiveKit, MinIO, and the FreeCord API
@@ -29,6 +30,8 @@ FreeCord is a self-hosted desktop community app for persistent text chat, low-la
 | Browser | None | FreeCord is desktop-only; no web client is included |
 
 See [Platform support](docs/PLATFORM_SUPPORT.md) for known limitations.
+
+Linux screen video is supported, but desktop-audio sharing remains experimental. Current CachyOS physical testing can still capture the streamer's microphone/self audio instead of the selected application's audio, so it is not release-qualified yet.
 
 ## Quick start
 

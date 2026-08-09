@@ -12,7 +12,11 @@ export interface RoomAdminBoundary {
   removeParticipant(room: string, identity: string, options?: { revokeTokenTs?: bigint }): Promise<void>;
 }
 
-export function createRoomAdmin(url: string | undefined, apiKey: string | undefined, apiSecret: string | undefined): RoomAdminBoundary | undefined {
+export interface RoomPresenceBoundary {
+  listParticipants(room: string): Promise<ParticipantInfo[]>;
+}
+
+export function createRoomAdmin(url: string | undefined, apiKey: string | undefined, apiSecret: string | undefined): (RoomAdminBoundary & RoomPresenceBoundary) | undefined {
   return url && apiKey && apiSecret ? new RoomServiceClient(url, apiKey, apiSecret) : undefined;
 }
 

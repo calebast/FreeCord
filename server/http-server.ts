@@ -14,6 +14,7 @@ import { effectiveAccess, requireChannelPermission, requirePermission, resolveCh
 import { assignRole, createRole, deleteRole, listPermissions, listRoles, updateRole, validateRoleInput, type RoleInput } from "./community-admin.js";
 import { MediaService, writeMediaResponse } from "./media.js";
 import { createRoomAdmin, VoiceModerationService } from "./voice-moderation.js";
+import { VoicePresenceService } from "./voice-presence.js";
 import { updateOwnDisplayName, validateDisplayName, validatePasswordChange } from "./account-profile.js";
 import { RealtimeBroker } from "./realtime.js";
 import { listAuditEvents, writeAuditEvent } from "./audit-log.js";
@@ -30,6 +31,7 @@ export interface ApiRuntime {
   chatRateLimiter?: RateLimiter;
   media?: MediaService;
   voiceModeration?: VoiceModerationService;
+  voicePresence?: VoicePresenceService;
   passwordHasher?: PasswordHasher;
   realtime?: RealtimeBroker;
 }
@@ -381,11 +383,13 @@ export function createApiRuntime(overrides: Partial<ApiRuntime> = {}): ApiRuntim
   const realtime = overrides.realtime ?? new RealtimeBroker(database);
   const passwordHasher = overrides.passwordHasher ?? new Argon2PasswordHasher();
   const media = overrides.media ?? new MediaService(database, config);
+  const roomAdmin = createRoomAdmin(config.livekitApiUrl, config.livekitApiKey, config.livekitApiSecret);
   const voiceModeration = overrides.voiceModeration ?? new VoiceModerationService(
     database,
-    createRoomAdmin(config.livekitApiUrl, config.livekitApiKey, config.livekitApiSecret),
+    roomAdmin,
     config.livekitTokenTtlSeconds,
   );
+  const voicePresence = overrides.voicePresence ?? new VoicePresenceService(database, roomAdmin);
   let authenticate: ApiRuntime["authenticate"];
   let ready = Promise.resolve();
   const api = overrides.api ?? (() => {
@@ -470,7 +474,7 @@ export function createApiRuntime(overrides: Partial<ApiRuntime> = {}): ApiRuntim
     };
     return localApi;
   })();
-  return { config, database, api, rateLimiter: new InMemoryRateLimiter({ windowMs: 60_000, max: 60, maxKeys: 10_000 }), chatRateLimiter: new InMemoryRateLimiter({ windowMs: 60_000, max: 180, maxKeys: 10_000 }), media, voiceModeration, realtime, ...(authenticate ? { authenticate } : {}), ready, passwordHasher, ...overrides };
+  return { config, database, api, rateLimiter: new InMemoryRateLimiter({ windowMs: 60_000, max: 60, maxKeys: 10_000 }), chatRateLimiter: new InMemoryRateLimiter({ windowMs: 60_000, max: 180, maxKeys: 10_000 }), media, voiceModeration, voicePresence, realtime, ...(authenticate ? { authenticate } : {}), ready, passwordHasher, ...overrides };
 }
 
 export function createHttpServer(runtime: ApiRuntime): Server {
@@ -609,6 +613,11 @@ export function createHttpServer(runtime: ApiRuntime): Server {
       }
       if (request.method === "GET" && url.pathname === "/v1/community/channels") {
         json(response, 200, await runtime.api.community.channels(context), requestId);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/v1/community/voice-presence") {
+        if (!context.user || !runtime.voicePresence) throw new Error("unauthorized");
+        json(response, 200, await runtime.voicePresence.listForUser(context.user.id), requestId);
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/community/files") {

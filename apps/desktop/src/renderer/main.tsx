@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import type { AuditEvent, AudioSettings, AuthenticatedUser, ChannelMetadata, ChatMessage, CommunityMember, GiphyResult, RealtimeEvent, ServerSettings, SessionState, SharedFile } from "../shared/bridge";
+import type { AuditEvent, AudioSettings, AuthenticatedUser, ChannelMetadata, ChatMessage, CommunityMember, GiphyResult, RealtimeEvent, ServerSettings, SessionState, SharedFile, VoicePresenceResponse } from "../shared/bridge";
 import { VoiceClient, type ScreenShareBitrate, type ScreenShareFrameRate, type ScreenShareResolution, type VoiceScreenShare, type VoiceState } from "./voice";
 import { decryptChatMessage, encryptChatMessage, isChatKey } from "./chat-crypto";
 import { playNotificationSound } from "./sounds";
@@ -205,6 +205,7 @@ function App(): React.JSX.Element {
   const [displayName, setDisplayName] = React.useState("");
   const [channels, setChannels] = React.useState<ChannelMetadata[]>([]);
   const [members, setMembers] = React.useState<CommunityMember[]>([]);
+  const [voicePresence, setVoicePresence] = React.useState<VoicePresenceResponse>({ observedAt: "", stale: true, channels: [] });
   const [channelsBusy, setChannelsBusy] = React.useState(false);
   const [selectedChannelId, setSelectedChannelId] = React.useState<string | null>(null);
   const [inviteToken, setInviteToken] = React.useState<string | null>(null);
@@ -238,6 +239,7 @@ function App(): React.JSX.Element {
   const [newChannelType, setNewChannelType] = React.useState<"text" | "voice">("text");
   const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
   const [reactionPickerMessageId, setReactionPickerMessageId] = React.useState<string | null>(null);
+  const [reactionAffordanceMessageId, setReactionAffordanceMessageId] = React.useState<string | null>(null);
   const [messageMenu, setMessageMenu] = React.useState<{ x: number; y: number; message: ChatMessage } | null>(null);
   const [voiceParticipantMenu, setVoiceParticipantMenu] = React.useState<VoiceParticipantMenu | null>(null);
   const [channelMenu, setChannelMenu] = React.useState<ChannelContextMenu | null>(null);
@@ -303,12 +305,31 @@ function App(): React.JSX.Element {
   const chatSoundChannelRef = React.useRef<string | null>(null);
   const knownChatMessageIdsRef = React.useRef(new Set<string>());
   const chatSoundInitializedRef = React.useRef(false);
+  const reactionAffordanceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
-    const closeMenus = () => { setMessageMenu(null); setReactionPickerMessageId(null); setVoiceParticipantMenu(null); setChannelMenu(null); };
+    const closeMenus = () => { setMessageMenu(null); setReactionPickerMessageId(null); setReactionAffordanceMessageId(null); setVoiceParticipantMenu(null); setChannelMenu(null); };
     window.addEventListener("click", closeMenus);
     return () => window.removeEventListener("click", closeMenus);
   }, []);
+
+  React.useEffect(() => () => {
+    if (reactionAffordanceTimerRef.current) clearTimeout(reactionAffordanceTimerRef.current);
+  }, []);
+
+  function scheduleReactionAffordance(messageId: string): void {
+    if (reactionAffordanceTimerRef.current) clearTimeout(reactionAffordanceTimerRef.current);
+    reactionAffordanceTimerRef.current = setTimeout(() => {
+      setReactionAffordanceMessageId(messageId);
+      reactionAffordanceTimerRef.current = null;
+    }, 1_000);
+  }
+
+  function hideReactionAffordance(messageId: string): void {
+    if (reactionAffordanceTimerRef.current) clearTimeout(reactionAffordanceTimerRef.current);
+    reactionAffordanceTimerRef.current = null;
+    if (reactionPickerMessageId !== messageId) setReactionAffordanceMessageId((current) => current === messageId ? null : current);
+  }
 
   React.useEffect(() => { selectedChannelIdRef.current = selectedChannelId; }, [selectedChannelId]);
   React.useEffect(() => { chatKeyRef.current = chatKey; }, [chatKey]);
@@ -467,6 +488,7 @@ function App(): React.JSX.Element {
       setChannelsBusy(false);
       setChannels([]);
       setMembers([]);
+      setVoicePresence({ observedAt: "", stale: true, channels: [] });
       setSelectedChannelId(null);
       setChatKey(null);
       setChatNextCursor(null);
@@ -513,8 +535,22 @@ function App(): React.JSX.Element {
       else setMessage(result.message);
     };
     void loadMembers();
+    let voicePresenceInFlight = false;
+    const loadVoicePresence = async () => {
+      if (voicePresenceInFlight) return;
+      voicePresenceInFlight = true;
+      try {
+        const result = await window.freecord.getVoicePresence();
+        if (!currentSession()) return;
+        if ("channels" in result) setVoicePresence(result);
+      } finally {
+        voicePresenceInFlight = false;
+      }
+    };
+    void loadVoicePresence();
     const memberTimer = window.setInterval(() => void loadMembers(), 5000);
-    return () => window.clearInterval(memberTimer);
+    const voicePresenceTimer = window.setInterval(() => void loadVoicePresence(), 5000);
+    return () => { window.clearInterval(memberTimer); window.clearInterval(voicePresenceTimer); };
   }, [auth.status]);
 
   React.useEffect(() => {
@@ -1289,17 +1325,26 @@ function App(): React.JSX.Element {
 
   async function deactivateManagedMember(): Promise<void> {
     if (!managedMember || memberDeactivateConfirm !== managedMember.username) return;
+    const target = managedMember;
     setMemberAdminBusy(true);
     try {
-      const result = await window.freecord.deactivateMember(managedMember.id);
-      if (!("ok" in result) || !result.ok) { setMessage(resultMessage(result) ?? "The member account could not be deactivated."); return; }
-      setMembers((current) => current.filter((member) => member.id !== managedMember.id));
-      setAssignmentMemberId((current) => current === managedMember.id ? "" : current);
-      setMessage(`${managedMember.displayName}'s account was deactivated and signed out.`);
+      const result = await window.freecord.deactivateMember(target.id);
+      if (!("ok" in result) || !result.ok) {
+        const requestReference = "requestId" in result && result.requestId ? ` Reference: ${result.requestId}` : "";
+        setMessage(`${resultMessage(result) ?? "The member account could not be deactivated."}${requestReference}`);
+        return;
+      }
+      const refreshed = await window.freecord.getMembers();
+      if ("members" in refreshed) setMembers(refreshed.members);
+      else setMembers((current) => current.filter((member) => member.id !== target.id));
+      setAssignmentMemberId((current) => current === target.id ? "" : current);
+      setMessage(`${target.displayName}'s account was deactivated and signed out.`);
       setManagedMember(null);
       setMemberResetPassword("");
       setMemberResetPasswordConfirm("");
       setMemberDeactivateConfirm("");
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : "The desktop could not complete the account deletion request.");
     } finally { setMemberAdminBusy(false); }
   }
 
@@ -1355,13 +1400,16 @@ function App(): React.JSX.Element {
     const selectedTextChannel = selectedChannel?.type === "text" ? selectedChannel : undefined;
     const textChannels = channels.filter((channel) => channel.type === "text");
     const voiceChannels = channels.filter((channel) => channel.type === "voice");
-    const voiceParticipantIds = new Set(voiceState.participants.map((participant) => participant.identity));
+    const voiceParticipantIds = new Set([
+      ...voiceState.participants.map((participant) => participant.identity),
+      ...voicePresence.channels.flatMap((channel) => channel.occupants.map((occupant) => occupant.userId)),
+    ]);
     const memberById = new Map(members.map((member) => [member.id, member]));
     const onlineMembers = members.filter((member) => member.online && member.id !== user.id);
     const offlineMembers = members.filter((member) => !member.online && member.id !== user.id);
     const currentMember = memberById.get(user.id);
     const userPermissions = currentMember?.permissions ?? (user as AuthenticatedUser & ExtendedPrincipal).permissions ?? [];
-    const hasPermission = (permission: string) => user.role === "owner" || userPermissions.includes(permission) || (user.role === "admin" && ["channels.manage", "channels.text.create", "channels.voice.create", "voice.moderate", "voice.mute", "voice.disconnect", "voice.move", "roles.manage", "roles.assign", "emotes.manage", "emotes.create", "audit.view", "members.password.reset", "members.deactivate", "voice.restrictions.manage"].includes(permission));
+    const hasPermission = (permission: string) => user.role === "owner" || userPermissions.includes(permission);
     const canManageChannels = hasPermission("channels.manage");
     const canCreateTextChannels = canManageChannels || hasPermission("channels.text.create");
     const canCreateVoiceChannels = canManageChannels || hasPermission("channels.voice.create");
@@ -1382,30 +1430,46 @@ function App(): React.JSX.Element {
         <header className="workspace-header"><div className="brand-mark">F</div><strong>FreeCord</strong><span className="header-server">{serverOrigin.replace(/^https?:\/\//, "")}</span><div className="header-user"><Avatar name={user.displayName} avatar={memberAvatar(user)} size="small" />{user.displayName}<button className="header-button" type="button" onClick={() => void logout()} disabled={authBusy}>Sign out</button></div></header>
         <div className="workspace-grid">
           <aside className={`workspace-sidebar ${voiceState.status !== "idle" ? "voice-connected-sidebar" : ""}`}>
+            <div className="sidebar-scroll">
             <div className="panel-heading"><span>CHANNELS</span><span className="channel-count">{channels.length}</span></div>
             <div className="channel-section"><div className="channel-section-title">TEXT CHANNELS</div>{channelsBusy && <p className="hint">Loading…</p>}{textChannels.map((channel) => <div className="channel-context-target" key={channel.id} title={canManageChannels ? "Right-click to rename or delete" : undefined} onContextMenu={canManageChannels ? (event) => openChannelMenu(event, channel) : undefined}><button className={`nav-channel ${activeView === "chat" && selectedChannel?.id === channel.id ? "selected" : ""}`} type="button" onClick={() => { setActiveView("chat"); setSelectedChannelId(channel.id); setUnreadByChannel((current) => ({ ...current, [channel.id]: 0 })); }}><span>#</span><span className="channel-name">{channel.name}</span>{Boolean(unreadByChannel[channel.id]) && <span className="unread-count" aria-label={`${unreadByChannel[channel.id]} unread messages`}>{Math.min(unreadByChannel[channel.id] ?? 0, 99)}</span>}</button></div>)}</div>
             <div className="channel-section files-section"><div className="channel-section-title">COMMUNITY</div><button className={`nav-channel ${activeView === "server-files" ? "selected" : ""}`} type="button" onClick={() => setActiveView("server-files")}><span>▤</span>Server Files</button><button className={`nav-channel ${activeView === "copyparty" ? "selected" : ""}`} type="button" onClick={() => setActiveView("copyparty")}><span>▣</span>Copyparty</button></div>
             <div className="channel-section"><div className="channel-section-title">VOICE CHANNELS</div>{voiceChannels.map((channel) => {
               const isActiveVoiceChannel = voiceState.channelId === channel.id;
-              const showVoiceMembers = isActiveVoiceChannel && voiceState.status !== "idle" && voiceState.status !== "error";
+              const visibleVoiceMembers = new Map<string, { identity: string; name: string; muted: boolean; deafened: boolean; screenSharing: boolean; speaking: boolean; self: boolean }>();
+              for (const occupant of voicePresence.channels.find((item) => item.channelId === channel.id)?.occupants ?? []) {
+                const member = memberById.get(occupant.userId);
+                if (!member && occupant.userId !== user.id) continue;
+                visibleVoiceMembers.set(occupant.userId, {
+                  identity: occupant.userId,
+                  name: occupant.userId === user.id ? user.displayName : member!.displayName,
+                  muted: occupant.microphone !== "active",
+                  deafened: occupant.deafened,
+                  screenSharing: occupant.screenSharing,
+                  speaking: false,
+                  self: occupant.userId === user.id,
+                });
+              }
+              if (isActiveVoiceChannel && voiceState.status !== "idle" && voiceState.status !== "error") {
+                visibleVoiceMembers.set(user.id, { identity: user.id, name: user.displayName, muted: voiceState.muted, deafened: voiceState.deafened, screenSharing: voiceState.screenSharing, speaking: voiceState.speaking, self: true });
+                for (const participant of voiceState.participants) visibleVoiceMembers.set(participant.identity, { identity: participant.identity, name: participant.name, muted: participant.muted, deafened: participant.deafened, screenSharing: voiceState.screenShares.some((share) => share.identity === participant.identity), speaking: participant.speaking, self: false });
+              }
+              const roster = [...visibleVoiceMembers.values()];
+              const showVoiceMembers = roster.length > 0 || (isActiveVoiceChannel && voiceState.status === "connected");
               return <div className="voice-channel-group" key={channel.id}>
                 <div className="channel-context-target" title={canManageChannels ? "Right-click to rename or delete" : undefined} onContextMenu={canManageChannels ? (event) => openChannelMenu(event, channel) : undefined}><button className={`nav-channel ${isActiveVoiceChannel ? "selected" : ""}`} type="button" onClick={() => void joinVoiceChannel(channel)} disabled={channel.canConnect === false || voiceState.status === "connecting"}><span>◖</span>{channel.name}{isActiveVoiceChannel && <em>{voiceState.status}</em>}</button></div>
                 {showVoiceMembers && <div className="voice-channel-members" aria-label={`Participants in ${channel.name}`}>
-                  <div className={`voice-member ${voiceState.speaking ? "speaking" : ""}`}>
-                    <Avatar name={user.displayName} avatar={memberAvatar(user)} size="small" speaking={voiceState.speaking} />
-                    <span className="voice-member-name">{user.displayName}</span>
-                    <span className="voice-member-icons" aria-label={`${voiceState.muted ? "Microphone muted" : "Microphone on"}${voiceState.deafened ? ", deafened" : ""}`}>{voiceState.muted ? "🎙️" : ""}{voiceState.deafened ? "🔇" : ""}</span>
-                    <small>You</small>
-                  </div>
-                  {voiceState.participants.map((participant) => <div className={`voice-member ${participant.speaking ? "speaking" : ""}`} key={participant.identity} title={`Right-click ${participant.name} for volume and voice actions`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setVoiceParticipantMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 260)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 250)), identity: participant.identity, channelId: channel.id }); }}>
-                    <Avatar name={participant.name} avatar={memberAvatar(memberById.get(participant.identity))} size="small" speaking={participant.speaking} />
+                  {roster.map((participant) => <div className={`voice-member ${participant.speaking ? "speaking" : ""}`} key={participant.identity} title={!participant.self && isActiveVoiceChannel ? `Right-click ${participant.name} for volume and voice actions` : participant.name} onContextMenu={!participant.self && isActiveVoiceChannel ? (event) => { event.preventDefault(); event.stopPropagation(); setVoiceParticipantMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 260)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 250)), identity: participant.identity, channelId: channel.id }); } : undefined}>
+                    <Avatar name={participant.name} avatar={memberAvatar(participant.self ? user : memberById.get(participant.identity))} size="small" speaking={participant.speaking} />
                     <span className="voice-member-name">{participant.name}</span>
-                    <span className="voice-member-icons" aria-label={`${participant.muted ? "Microphone muted" : "Microphone on"}${participant.deafened ? ", deafened" : ""}`}>{participant.muted ? "🎙️" : ""}{participant.deafened ? "🔇" : ""}</span>
+                    <span className="voice-member-icons" aria-label={`${participant.muted ? "Microphone muted" : "Microphone on"}${participant.deafened ? ", deafened" : ""}${participant.screenSharing ? ", sharing screen" : ""}`}>{participant.muted ? "🎙️" : ""}{participant.deafened ? "🔇" : ""}{participant.screenSharing ? "▣" : ""}</span>
+                    {participant.self && <small>You</small>}
                   </div>)}
-                  {voiceState.participants.length === 0 && voiceState.status === "connected" && <small className="voice-channel-empty">No other users connected</small>}
+                  {roster.length === 0 && voiceState.status === "connected" && <small className="voice-channel-empty">No users connected</small>}
                 </div>}
               </div>;
             })}</div>
+            </div>
             {voiceState.status !== "idle" && <div className="voice-dock"><div className="voice-dock-status"><span className="online-dot" />{voiceState.status}</div>{voiceState.error && <p className="voice-error">{voiceState.error}</p>}<div className="voice-dock-actions"><button type="button" onClick={() => void voice.setMuted(!voiceState.muted)}>{voiceState.muted ? "Unmute" : "Mute"}</button><button type="button" onClick={() => void voice.setDeafened(!voiceState.deafened)}>{voiceState.deafened ? "Undeafen" : "Deafen"}</button><button type="button" onClick={() => void voice.leave()}>Leave</button></div>{voiceState.status === "connected" && <><div className="voice-share-options"><label>Share size<select value={voiceState.screenShareSettings.resolution} onChange={(event) => updateScreenShareSetting("resolution", Number(event.target.value) as ScreenShareResolution)} disabled={voiceState.screenShareBusy}><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option></select></label><label>FPS<select value={voiceState.screenShareSettings.frameRate} onChange={(event) => updateScreenShareSetting("frameRate", Number(event.target.value) as ScreenShareFrameRate)} disabled={voiceState.screenShareBusy}><option value="30">30</option><option value="60">60</option></select></label><label>Bitrate<select value={voiceState.screenShareSettings.bitrate} onChange={(event) => updateScreenShareSetting("bitrate", Number(event.target.value) as ScreenShareBitrate)} disabled={voiceState.screenShareBusy}><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8">8 Mbps</option></select></label></div><label className="screen-audio-toggle"><input type="checkbox" checked={voiceState.screenShareAudioEnabled} onChange={(event) => voice.setScreenShareAudioEnabled(event.target.checked)} disabled={voiceState.screenShareBusy || voiceState.screenSharing} />Share desktop audio</label>{runtimePlatform === "linux" && voiceState.screenShareAudioEnabled && <p className="screen-audio-hint">Application audio is captured automatically; no KDE routing changes are needed.</p>}<button className="voice-share-button" type="button" disabled={voiceState.screenShareBusy} onClick={() => void (voiceState.screenSharing ? voice.stopScreenShare() : voice.startScreenShare())}>{voiceState.screenShareBusy ? "Starting…" : voiceState.screenSharing ? "Stop sharing" : "Share screen"}</button></>}</div>}
             <div className="sidebar-footer"><Avatar name={user.displayName} avatar={memberAvatar(user)} size="small" /><button className="profile-button" type="button" onClick={() => setSettingsOpen(true)}><strong>{user.username}</strong><small>{(user as AuthenticatedUser & ExtendedPrincipal).roles?.map((role) => role.name).join(", ") || user.role}</small></button><button className="icon-button" type="button" title="Open settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
           </aside>
@@ -1426,7 +1490,7 @@ function App(): React.JSX.Element {
                 const renderedMessageText = embedded?.type === "attachments"
                   ? renderMessageText(messageText, emotes, mentionMembers, user.username)
                   : renderMessageText(chatMessage.content ?? "", emotes, mentionMembers, user.username);
-                return <article data-message-id={chatMessage.id} className={`chat-message ${chatMessage.deletedAt ? "deleted" : ""} ${messageText && containsMention(messageText, user.username) ? "mentions-self" : ""}`} key={chatMessage.id} onContextMenu={(event) => { if (!chatMessage.deletedAt && canManage) { event.preventDefault(); setMessageMenu({ x: event.clientX, y: event.clientY, message: chatMessage }); } }}>
+                return <article data-message-id={chatMessage.id} className={`chat-message ${chatMessage.deletedAt ? "deleted" : ""} ${messageText && containsMention(messageText, user.username) ? "mentions-self" : ""}`} key={chatMessage.id} onPointerEnter={() => scheduleReactionAffordance(chatMessage.id)} onPointerLeave={() => hideReactionAffordance(chatMessage.id)} onContextMenu={(event) => { if (!chatMessage.deletedAt && canManage) { event.preventDefault(); setMessageMenu({ x: event.clientX, y: event.clientY, message: chatMessage }); } }}>
                   <Avatar name={chatMessage.authorDisplayName} avatar={memberAvatar(author)} />
                   <div className="chat-message-body"><div className="message-meta"><strong>{chatMessage.authorDisplayName}</strong><time dateTime={chatMessage.createdAt}>{new Date(chatMessage.createdAt).toLocaleString()}{chatMessage.editedAt && " · edited"}</time></div>
                     {editingMessageId === chatMessage.id ? <form className="message-edit-form" onSubmit={(event) => void saveEditedMessage(event)}><input value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} autoFocus /><button type="submit">Save</button><button type="button" className="secondary" onClick={() => setEditingMessageId(null)}>Cancel</button></form> : <>
@@ -1439,7 +1503,7 @@ function App(): React.JSX.Element {
                         const emote = reaction.emote ?? emotes.find((item) => item.id === reactionEmoteId);
                         const unicode = reaction.emoji ?? reaction.unicode ?? (reaction.target?.kind === "unicode" ? reaction.target.value : "");
                         return emote ? <button type="button" key={`emote:${emote.id}`} className={`reaction-chip ${reaction.reacted ? "reacted" : ""}`} onClick={() => void toggleEmoteReaction(chatMessage, emote)}><CustomEmoteImage emote={emote} /> {reaction.count}</button> : <button type="button" key={unicode} className={reaction.reacted ? "reacted" : ""} onClick={() => void toggleReaction(chatMessage, unicode)}>{unicode} {reaction.count}</button>;
-                      })}<span className="reaction-picker-anchor"><button type="button" className="reaction-add" aria-label="Add reaction" onClick={(event) => { event.stopPropagation(); const opening = reactionPickerMessageId !== chatMessage.id; setReactionPickerMessageId(opening ? chatMessage.id : null); if (opening) void refreshCommunityEmotes(); }}>＋</button>{reactionPickerMessageId === chatMessage.id && <div className="reaction-picker" onClick={(event) => event.stopPropagation()}>{commonEmojis.map((emoji) => <button type="button" key={emoji} onClick={() => { void toggleReaction(chatMessage, emoji); setReactionPickerMessageId(null); }}>{emoji}</button>)}{emotes.map((emote) => <button type="button" key={emote.id} title={`:${emote.name}:`} onClick={() => { void toggleEmoteReaction(chatMessage, emote); setReactionPickerMessageId(null); }}><CustomEmoteImage emote={emote} /></button>)}</div>}</span></div>}
+                      })}<span className="reaction-picker-anchor"><button type="button" className={`reaction-add ${reactionAffordanceMessageId === chatMessage.id || reactionPickerMessageId === chatMessage.id ? "visible" : ""}`} aria-label="Add reaction" aria-expanded={reactionPickerMessageId === chatMessage.id} aria-controls={`reaction-picker-${chatMessage.id}`} onFocus={() => setReactionAffordanceMessageId(chatMessage.id)} onClick={(event) => { event.stopPropagation(); const opening = reactionPickerMessageId !== chatMessage.id; setReactionPickerMessageId(opening ? chatMessage.id : null); setReactionAffordanceMessageId(chatMessage.id); if (opening) void refreshCommunityEmotes(); }}>{"＋"}</button>{reactionPickerMessageId === chatMessage.id && <div className="reaction-picker" id={`reaction-picker-${chatMessage.id}`} onClick={(event) => event.stopPropagation()}>{commonEmojis.map((emoji) => <button type="button" key={emoji} onClick={() => { void toggleReaction(chatMessage, emoji); setReactionPickerMessageId(null); }}>{emoji}</button>)}{emotes.map((emote) => <button type="button" key={emote.id} title={`:${emote.name}:`} onClick={() => { void toggleEmoteReaction(chatMessage, emote); setReactionPickerMessageId(null); }}><CustomEmoteImage emote={emote} /></button>)}</div>}</span></div>}
                     </>}
                   </div>
                 </article>;
@@ -1489,7 +1553,15 @@ function App(): React.JSX.Element {
           <button type="button" className="danger" onClick={() => { const channel = channelMenu.channel; setChannelMenu(null); void deleteChannel(channel); }}>Delete channel</button>
         </div>}
         {screenViewerOpen && <div className={`screen-viewer-overlay ${screenViewerFullscreen ? "fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label="Stream viewer"><header><div><p className="eyebrow">LIVE STREAMS</p><h2>Stream viewer</h2></div><div className="screen-viewer-actions">{(streamAudioBlocked || voiceState.audioPlaybackBlocked) && <button type="button" onClick={() => void enableStreamAudio()}>Enable stream audio</button>}<button type="button" onClick={() => void toggleScreenViewerFullscreen()}>Full screen</button><button type="button" className="secondary" onClick={() => void closeScreenViewer()}>Close</button></div></header><div className="screen-viewer-layout"><nav>{voiceState.screenShares.map((share) => <button type="button" className={selectedScreenShareId === share.identity ? "selected" : ""} key={share.identity} onClick={() => { setSelectedScreenShareId(share.identity); setStreamAudioBlocked(false); }}>{share.name}'s screen</button>)}</nav><div className="screen-viewer-stage">{voiceState.screenShares.filter((share) => share.identity === selectedScreenShareId).map((share) => <ScreenShareTile share={share} selected audioEnabled={share.identity !== user.id} onAudioBlocked={() => setStreamAudioBlocked(true)} onVolumeChange={(identity, volume) => voice.setScreenShareVolume(identity, volume)} key={share.identity} />)}{!selectedScreenShareId && <p>Select a stream to view.</p>}</div></div>{screenViewerFullscreen && <button type="button" className="screen-viewer-exit-fullscreen" onClick={() => void toggleScreenViewerFullscreen()} aria-label="Exit full screen">Exit full screen</button>}</div>}
-        {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="FreeCord settings"><section className="settings-panel"><div className="settings-header"><div><p className="eyebrow">FREECORD SETTINGS</p><h2>Settings</h2></div><button className="secondary" type="button" onClick={() => setSettingsOpen(false)}>Close</button></div><div className="settings-layout"><nav className="settings-tabs" aria-label="Settings sections"><button type="button" className={settingsTab === "profile" ? "active" : ""} onClick={() => setSettingsTab("profile")}><strong>Profile</strong><small>Identity and account</small></button><button type="button" className={settingsTab === "audio" ? "active" : ""} onClick={() => setSettingsTab("audio")}><strong>Voice &amp; Audio</strong><small>Devices and sensitivity</small></button>{canAccessAdmin && <button type="button" className={settingsTab === "admin" ? "active" : ""} onClick={() => setSettingsTab("admin")}><strong>Admin</strong><small>Members, roles, channels</small></button>}{canViewAudit && <button type="button" className={settingsTab === "audit" ? "active" : ""} onClick={() => setSettingsTab("audit")}><strong>Audit log</strong><small>Administrative activity</small></button>}<button type="button" className="settings-support-link" onClick={() => void window.freecord.openSupportPage()}><strong>☕ Buy me a coffee</strong><small>Support FreeCord</small></button></nav><div className="settings-scroll">
+        {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title"><section className="settings-panel">
+          <div className="settings-header"><div><p className="eyebrow">FREECORD SETTINGS</p><h2 id="settings-title">Settings</h2><p>Manage your account, audio, and community in one place.</p></div><button className="secondary settings-close" type="button" onClick={() => setSettingsOpen(false)}>Close</button></div>
+          <div className="settings-layout"><nav className="settings-tabs" aria-label="Settings sections">
+            <button type="button" className={settingsTab === "profile" ? "active" : ""} aria-current={settingsTab === "profile" ? "page" : undefined} onClick={() => setSettingsTab("profile")}><span className="settings-tab-icon" aria-hidden="true">●</span><span><strong>Profile</strong><small>Identity and account</small></span></button>
+            <button type="button" className={settingsTab === "audio" ? "active" : ""} aria-current={settingsTab === "audio" ? "page" : undefined} onClick={() => setSettingsTab("audio")}><span className="settings-tab-icon" aria-hidden="true">◖</span><span><strong>Voice &amp; Audio</strong><small>Devices and processing</small></span></button>
+            {canAccessAdmin && <button type="button" className={settingsTab === "admin" ? "active" : ""} aria-current={settingsTab === "admin" ? "page" : undefined} onClick={() => setSettingsTab("admin")}><span className="settings-tab-icon" aria-hidden="true">◆</span><span><strong>Administration</strong><small>Members, roles, channels</small></span></button>}
+            {canViewAudit && <button type="button" className={settingsTab === "audit" ? "active" : ""} aria-current={settingsTab === "audit" ? "page" : undefined} onClick={() => setSettingsTab("audit")}><span className="settings-tab-icon" aria-hidden="true">▤</span><span><strong>Audit log</strong><small>Administrative activity</small></span></button>}
+            <button type="button" className="settings-support-link" onClick={() => void window.freecord.openSupportPage()}><span className="settings-tab-icon" aria-hidden="true">☕</span><span><strong>Buy me a coffee</strong><small>Support FreeCord</small></span></button>
+          </nav><div className="settings-scroll">
           {settingsTab === "profile" && <><div className="settings-section"><h3>Profile</h3><form className="profile-name-form" onSubmit={(event) => void saveProfile(event)}><label>Display name<input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={100} autoComplete="name" /></label><button type="submit" disabled={profileBusy || !profileDisplayName.trim() || profileDisplayName.trim() === user.displayName}>Save display name</button></form><div className="profile-avatar-settings"><Avatar name={user.displayName} avatar={memberAvatar(user)} /><label className="upload-button">Upload profile picture<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAvatar(file); event.currentTarget.value = ""; }} /></label>{memberAvatar(user) && <button type="button" className="secondary" onClick={() => void window.freecord.removeMyAvatar().then((result) => { if ("userId" in result) { setAuth((current) => current.user ? { ...current, user: { ...current.user, avatar: undefined } } : current); setMembers((current) => current.map((member) => member.id === user.id ? { ...member, avatar: undefined } : member)); setMessage("Profile picture removed."); } else setMessage(result.message); })}>Remove</button>}</div><label>Status<select value={user.status} onChange={(event) => void changeStatus(event.target.value as "active" | "busy" | "away")}><option value="active">Active</option><option value="busy">Busy</option><option value="away">Away</option></select></label><div className="assigned-roles"><span>Assigned roles</span><div>{assignedRoles.length ? assignedRoles.map((role) => <span className="role-chip" key={role.id}>{role.name}</span>) : <span className="role-chip">{user.role}</span>}</div></div></div><div className="settings-section"><h3>Change password</h3><form className="password-form" onSubmit={(event) => void changeProfilePassword(event)}><label>Current password<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label><label>New password<input type="password" value={newProfilePassword} onChange={(event) => setNewProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><label>Confirm new password<input type="password" value={confirmProfilePassword} onChange={(event) => setConfirmProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><button type="submit" disabled={profileBusy || !currentPassword || newProfilePassword.length < 12 || !confirmProfilePassword}>Change password</button></form><p className="hint">Changing your password signs out your other FreeCord sessions.</p></div></>}
           {settingsTab === "audio" && <>
             <div className="settings-section">
@@ -1509,10 +1581,10 @@ function App(): React.JSX.Element {
               {voiceState.audioProcessingError && <p className="settings-error">RNNoise could not start: {voiceState.audioProcessingError}</p>}
             </div>
           </>}
-          {settingsTab === "admin" && canAccessAdmin && (canCreateTextChannels || canCreateVoiceChannels || canManageChannels) && <div className="settings-section"><h3>Channels</h3>{(canCreateTextChannels || canCreateVoiceChannels) && <form className="channel-create-form" onSubmit={(event) => void createChannel(event, !canCreateTextChannels && canCreateVoiceChannels ? "voice" : undefined)}><input value={newChannelName} onChange={(event) => setNewChannelName(event.target.value)} placeholder="Channel name" maxLength={64} /><select value={!canCreateTextChannels && canCreateVoiceChannels ? "voice" : newChannelType} onChange={(event) => setNewChannelType(event.target.value as "text" | "voice")}>
+          {settingsTab === "admin" && canAccessAdmin && (canCreateTextChannels || canCreateVoiceChannels || canManageChannels) && <div className="settings-section"><h3>Channels</h3>{(canCreateTextChannels || canCreateVoiceChannels) && <form className="channel-create-form" onSubmit={(event) => void createChannel(event, !canCreateTextChannels && canCreateVoiceChannels ? "voice" : undefined)}><label>Channel name<input value={newChannelName} onChange={(event) => setNewChannelName(event.target.value)} placeholder="e.g. Game night" maxLength={64} /></label><label>Channel type<select value={!canCreateTextChannels && canCreateVoiceChannels ? "voice" : newChannelType} onChange={(event) => setNewChannelType(event.target.value as "text" | "voice")}>
             {canCreateTextChannels && <option value="text">Text channel</option>}{canCreateVoiceChannels && <option value="voice">Voice channel</option>}
-          </select><button type="submit" disabled={!newChannelName.trim()}>Create channel</button></form>}{canManageChannels && <p className="hint">Right-click a text or voice channel in the channel list to rename or delete it.</p>}</div>}
-          {settingsTab === "admin" && canAccessAdmin && canManageMemberAccounts && <div className="settings-section member-account-settings"><div className="settings-title-row"><div><h3>Member accounts</h3><p className="hint">Recover an account, clear persistent voice restrictions, or deactivate it without removing message and audit history.</p></div></div><div className="member-account-list">{members.filter((member) => member.id !== user.id && !member.isOwner && (user.role === "owner" || member.role !== "admin")).map((member) => <div key={member.id}><span><strong>{member.displayName}</strong><small>@{member.username} · {member.online ? "online" : "offline"}</small></span><button type="button" className="secondary" onClick={() => { setManagedMember(member); setMemberResetPassword(""); setMemberResetPasswordConfirm(""); setMemberDeactivateConfirm(""); }}>Manage</button></div>)}</div>{managedMember && <div className="member-account-card"><div className="settings-title-row"><div><h4>Manage {managedMember.displayName}</h4><p className="hint">@{managedMember.username}</p></div><button type="button" className="secondary" onClick={closeMemberAdministration} disabled={memberAdminBusy}>Close</button></div>{hasPermission("members.password.reset") && <form className="member-reset-form" onSubmit={(event) => void resetManagedMemberPassword(event)}><h5>Reset password</h5><p className="hint">Sets a temporary password and immediately signs out every existing session. Ask the member to change it after signing in. This does not restore an encryption key held only on another device.</p><label>Temporary password<input type="password" value={memberResetPassword} onChange={(event) => setMemberResetPassword(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><label>Confirm temporary password<input type="password" value={memberResetPasswordConfirm} onChange={(event) => setMemberResetPasswordConfirm(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><button type="submit" disabled={memberAdminBusy || memberResetPassword.length < 12 || memberResetPassword !== memberResetPasswordConfirm}>Reset password and sign out</button></form>}{hasPermission("voice.restrictions.manage") && <div className="member-account-action"><div><h5>Voice restrictions</h5><p className="hint">Clears persistent server mutes for this account. This is server state, not a desktop cache. The member must leave and rejoin voice.</p></div><button type="button" className="secondary" onClick={() => void clearManagedMemberVoiceRestrictions()} disabled={memberAdminBusy}>Clear voice restrictions</button></div>}{hasPermission("members.deactivate") && <div className="member-account-danger"><h5>Deactivate account</h5><p className="hint">Revokes every session, disables sign-in, releases the username, and removes profile data and roles. Messages and audit records remain as “Deleted User”.</p><label>Type <strong>{managedMember.username}</strong> to confirm<input value={memberDeactivateConfirm} onChange={(event) => setMemberDeactivateConfirm(event.target.value)} autoComplete="off" /></label><button type="button" className="danger-button" onClick={() => void deactivateManagedMember()} disabled={memberAdminBusy || memberDeactivateConfirm !== managedMember.username}>Deactivate account</button></div>}</div>}</div>}
+          </select></label><button type="submit" disabled={!newChannelName.trim()}>Create channel</button></form>}{canManageChannels && <p className="hint">Right-click a text or voice channel in the channel list to rename or delete it.</p>}</div>}
+          {settingsTab === "admin" && canAccessAdmin && canManageMemberAccounts && <div className="settings-section member-account-settings"><div className="settings-title-row"><div><h3>Member accounts</h3><p className="hint">Recover an account, clear persistent voice restrictions, or delete access without removing message and audit history.</p></div></div><div className="member-account-list">{members.filter((member) => member.id !== user.id && !member.isOwner && (user.role === "owner" || member.role !== "admin")).map((member) => <div key={member.id}><span><strong>{member.displayName}</strong><small>@{member.username} · {member.online ? "online" : "offline"}</small></span><button type="button" className="secondary" onClick={() => { setManagedMember(member); setMemberResetPassword(""); setMemberResetPasswordConfirm(""); setMemberDeactivateConfirm(""); }}>Manage</button></div>)}</div>{managedMember && <div className="member-account-card"><div className="settings-title-row"><div><h4>Manage {managedMember.displayName}</h4><p className="hint">@{managedMember.username}</p></div><button type="button" className="secondary" onClick={closeMemberAdministration} disabled={memberAdminBusy}>Close</button></div>{hasPermission("members.password.reset") && <form className="member-reset-form" onSubmit={(event) => void resetManagedMemberPassword(event)}><h5>Reset password</h5><p className="hint">Sets a temporary password and immediately signs out every existing session. Ask the member to change it after signing in. This does not restore an encryption key held only on another device.</p><label>Temporary password<input type="password" value={memberResetPassword} onChange={(event) => setMemberResetPassword(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><label>Confirm temporary password<input type="password" value={memberResetPasswordConfirm} onChange={(event) => setMemberResetPasswordConfirm(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><button type="submit" disabled={memberAdminBusy || memberResetPassword.length < 12 || memberResetPassword !== memberResetPasswordConfirm}>Reset password and sign out</button></form>}{hasPermission("voice.restrictions.manage") && <div className="member-account-action"><div><h5>Voice restrictions</h5><p className="hint">Clears persistent server mutes for this account. This is server state, not a desktop cache. The member must leave and rejoin voice.</p></div><button type="button" className="secondary" onClick={() => void clearManagedMemberVoiceRestrictions()} disabled={memberAdminBusy}>Clear voice restrictions</button></div>}{hasPermission("members.deactivate") && <div className="member-account-danger"><h5>Delete user access</h5><p className="hint">Revokes every session, disables sign-in, releases the username, and removes profile data and roles. Messages and audit records remain as “Deleted User”.</p><label>Type <strong>{managedMember.username}</strong> to confirm<input value={memberDeactivateConfirm} onChange={(event) => setMemberDeactivateConfirm(event.target.value)} autoComplete="off" /></label><button type="button" className="danger-button" onClick={() => void deactivateManagedMember()} disabled={memberAdminBusy || memberDeactivateConfirm !== managedMember.username}>{memberAdminBusy ? "Deleting…" : "Delete user access"}</button></div>}</div>}</div>}
           {settingsTab === "admin" && canAccessAdmin && (hasPermission("roles.view") || hasPermission("roles.manage") || hasPermission("roles.assign")) && <div className="settings-section role-settings"><h3>Members and roles</h3><div className="member-role-list">{members.map((member) => { const memberRoles = (member as CommunityMember & ExtendedPrincipal).roles ?? []; return <div key={member.id}><span><strong>{member.displayName}</strong><small>@{member.username}</small></span><div>{memberRoles.length ? memberRoles.map((role) => <span className="role-chip" key={role.id}>{role.name}</span>) : <span className="role-chip">{member.role}</span>}</div></div>; })}</div>
             {hasPermission("roles.manage") && <><form onSubmit={(event) => void createRole(event)}><input value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} maxLength={48} placeholder="Role name" /><div className="permission-grid">{availablePermissions.map((permission) => <label key={permission}><input type="checkbox" checked={newRolePermissions.includes(permission)} onChange={() => togglePermission(permission, newRolePermissions, setNewRolePermissions)} />{permission}</label>)}</div><button type="submit" disabled={!newRoleName.trim()}>Create role</button></form>{roles.filter((role) => role.kind === "custom").map((role) => <details key={role.id}><summary>{role.name}</summary><div className="permission-grid">{availablePermissions.map((permission) => <label key={permission}><input type="checkbox" checked={(roleDraftPermissions[role.id] ?? role.permissions).includes(permission)} onChange={() => togglePermission(permission, roleDraftPermissions[role.id] ?? role.permissions, (next) => setRoleDraftPermissions((current) => ({ ...current, [role.id]: next })))} />{permission}</label>)}</div><button type="button" onClick={() => void saveRole(role)}>Save permissions</button></details>)}</>}
             {hasPermission("roles.assign") && <div className="role-assignment"><select value={assignmentMemberId} onChange={(event) => setAssignmentMemberId(event.target.value)}><option value="">Choose member</option>{members.filter((member) => member.id !== user.id).map((member) => <option value={member.id} key={member.id}>{member.displayName}</option>)}</select><select value={assignmentRoleId} onChange={(event) => setAssignmentRoleId(event.target.value)}><option value="">Choose role</option>{roles.filter((role) => role.kind === "custom").map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}</select><button type="button" onClick={() => void changeRoleAssignment(false)}>Assign</button><button type="button" className="secondary" onClick={() => void changeRoleAssignment(true)}>Remove</button></div>}

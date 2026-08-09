@@ -111,6 +111,24 @@ export interface CommunityMembersResponse {
   members: CommunityMember[];
 }
 
+export interface VoicePresenceOccupant {
+  userId: string;
+  microphone: "active" | "muted" | "not-published";
+  deafened: boolean;
+  screenSharing: boolean;
+}
+
+export interface VoiceChannelPresence {
+  channelId: string;
+  occupants: VoicePresenceOccupant[];
+}
+
+export interface VoicePresenceResponse {
+  observedAt: string;
+  stale: boolean;
+  channels: VoiceChannelPresence[];
+}
+
 export interface InviteResponse {
   token: string;
   expiresAt: string;
@@ -219,6 +237,9 @@ export interface AuthError {
   ok: false;
   code: "AUTHENTICATION_FAILED" | "SERVER_UNAVAILABLE" | "CREDENTIAL_STORAGE_UNAVAILABLE" | "NO_SERVER_CONFIGURED";
   message: string;
+  status?: number;
+  serverCode?: string;
+  requestId?: string;
 }
 
 export interface LoginInput {
@@ -384,6 +405,7 @@ export interface FreeCordBridge {
   deleteChannel(channelId: string): Promise<{ ok: true } | AuthError>;
   searchGiphy(query: string): Promise<{ results: GiphyResult[] } | AuthError>;
   getMembers(): Promise<CommunityMembersResponse | AuthError>;
+  getVoicePresence(): Promise<VoicePresenceResponse | AuthError>;
   createInvite(expiresInSeconds?: number): Promise<InviteResponse | AuthError>;
   getCommunityPermissions(): Promise<CommunityPermissionsResponse | AuthError>;
   getCommunityRoles(): Promise<CommunityRolesResponse | AuthError>;

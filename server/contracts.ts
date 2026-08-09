@@ -24,6 +24,7 @@ export const ENDPOINTS = {
   updateChannel: "PATCH /v1/community/channels/:channelId",
   deleteChannel: "DELETE /v1/community/channels/:channelId",
   members: "GET /v1/community/members",
+  voicePresence: "GET /v1/community/voice-presence",
   voiceToken: "POST /v1/channels/:channelId/voice-token",
   messages: "GET /v1/channels/:channelId/messages",
   createMessage: "POST /v1/channels/:channelId/messages",
@@ -192,6 +193,24 @@ export interface CommunityMember {
 
 export interface CommunityMembersResponse {
   members: CommunityMember[];
+}
+
+export interface VoicePresenceOccupant {
+  userId: string;
+  microphone: "active" | "muted" | "not-published";
+  deafened: boolean;
+  screenSharing: boolean;
+}
+
+export interface VoiceChannelPresence {
+  channelId: string;
+  occupants: VoicePresenceOccupant[];
+}
+
+export interface VoicePresenceResponse {
+  observedAt: string;
+  stale: boolean;
+  channels: VoiceChannelPresence[];
 }
 
 export interface AdminResetPasswordRequest {

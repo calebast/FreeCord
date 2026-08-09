@@ -54,6 +54,7 @@ test("account deactivation anonymizes instead of deleting the user and relies on
   const statements = queries.map((query) => query.text).join("\n");
   assert.match(statements, /SET username = 'deleted-'/);
   assert.match(statements, /is_active = false/);
+  assert.doesNotMatch(statements, /status = 'offline'/);
   assert.match(statements, /DELETE FROM member_roles/);
   assert.match(statements, /DELETE FROM user_profiles/);
   assert.ok(queries.some((query) => query.text.includes("INSERT INTO audit_events") && query.values.includes("account.deactivated")));

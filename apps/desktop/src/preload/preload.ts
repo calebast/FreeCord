@@ -49,6 +49,7 @@ const bridge: FreeCordBridge = {
   deleteChannel: (channelId) => ipcRenderer.invoke("community:delete-channel", channelId),
   searchGiphy: (query) => ipcRenderer.invoke("media:search-giphy", query),
   getMembers: () => ipcRenderer.invoke("community:get-members"),
+  getVoicePresence: () => ipcRenderer.invoke("community:get-voice-presence"),
   createInvite: (expiresInSeconds) => ipcRenderer.invoke("community:create-invite", expiresInSeconds),
   getCommunityPermissions: () => ipcRenderer.invoke("community:get-permissions"),
   getCommunityRoles: () => ipcRenderer.invoke("community:get-roles"),

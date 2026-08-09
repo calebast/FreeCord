@@ -23,6 +23,7 @@ import type {
   ChannelMetadata,
   GiphyResult,
   CommunityMembersResponse,
+  VoicePresenceResponse,
   InviteResponse,
   ChatMessage,
   MessagesResponse,
@@ -441,8 +442,15 @@ async function discardStagedRegistrationChatKey(stagedPath: string | null): Prom
   }
 }
 
-function authError(code: AuthError["code"], message: string): AuthError {
-  return { ok: false, code, message };
+function authError(code: AuthError["code"], message: string, details: Pick<AuthError, "status" | "serverCode" | "requestId"> = {}): AuthError {
+  return { ok: false, code, message, ...details };
+}
+
+class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly serverCode?: string, readonly requestId?: string) {
+    super(message);
+    this.name = status === 401 ? "Unauthorized" : "ServerError";
+  }
 }
 
 function signedOut(): SessionState {
@@ -564,13 +572,15 @@ async function requestJson<T>(origin: string, endpoint: string, init: RequestIni
   }
   if (!response.ok) {
     let message = "The FreeCord server rejected the request.";
+    let serverCode: string | undefined;
+    let requestId = response.headers.get("x-request-id") ?? undefined;
     try {
-      const body = await response.json() as { error?: { message?: string } };
+      const body = await response.json() as { error?: { message?: string; code?: string; requestId?: string } };
       if (typeof body.error?.message === "string") message = body.error.message;
+      if (typeof body.error?.code === "string") serverCode = body.error.code;
+      if (typeof body.error?.requestId === "string") requestId = body.error.requestId;
     } catch { /* Use the safe fallback message. */ }
-    const error = new Error(message);
-    error.name = response.status === 401 ? "Unauthorized" : "ServerError";
-    throw error;
+    throw new ApiRequestError(message, response.status, serverCode, requestId);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -580,6 +590,7 @@ function apiFailure(error: unknown, fallback: string): AuthError {
   return authError(
     error instanceof Error && error.name === "Unauthorized" ? "AUTHENTICATION_FAILED" : error instanceof Error && error.message.includes("Configure") ? "NO_SERVER_CONFIGURED" : "SERVER_UNAVAILABLE",
     error instanceof Error ? error.message : fallback,
+    error instanceof ApiRequestError ? { status: error.status, serverCode: error.serverCode, requestId: error.requestId } : {},
   );
 }
 
@@ -657,6 +668,35 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
 
 function normalizeMembersResponse(response: CommunityMembersResponse): CommunityMembersResponse {
   return { members: response.members.map((member) => ({ ...member, ...(member.avatar ? { avatar: normalizeMediaReference(member.avatar) } : {}) })) };
+}
+
+function normalizeVoicePresenceResponse(value: unknown): VoicePresenceResponse {
+  if (!value || typeof value !== "object") throw new Error("The FreeCord server returned invalid voice presence data.");
+  const response = value as Partial<VoicePresenceResponse>;
+  if (typeof response.observedAt !== "string" || response.observedAt.length > 64 || Number.isNaN(Date.parse(response.observedAt))
+    || typeof response.stale !== "boolean" || !Array.isArray(response.channels) || response.channels.length > 500) {
+    throw new Error("The FreeCord server returned invalid voice presence data.");
+  }
+  const channelIds = new Set<string>();
+  const channels = response.channels.map((channel) => {
+    if (!channel || typeof channel !== "object" || !validOpaqueId(channel.channelId) || channelIds.has(channel.channelId)
+      || !Array.isArray(channel.occupants) || channel.occupants.length > 1_000) {
+      throw new Error("The FreeCord server returned invalid voice presence data.");
+    }
+    channelIds.add(channel.channelId);
+    const userIds = new Set<string>();
+    const occupants = channel.occupants.map((occupant) => {
+      if (!occupant || typeof occupant !== "object" || !validOpaqueId(occupant.userId) || userIds.has(occupant.userId)
+        || !["active", "muted", "not-published"].includes(occupant.microphone)
+        || typeof occupant.deafened !== "boolean" || typeof occupant.screenSharing !== "boolean") {
+        throw new Error("The FreeCord server returned invalid voice presence data.");
+      }
+      userIds.add(occupant.userId);
+      return { userId: occupant.userId, microphone: occupant.microphone, deafened: occupant.deafened, screenSharing: occupant.screenSharing };
+    });
+    return { channelId: channel.channelId, occupants };
+  });
+  return { observedAt: new Date(response.observedAt).toISOString(), stale: response.stale, channels };
 }
 
 function normalizeMessagesResponse(response: MessagesResponse): MessagesResponse {
@@ -1588,6 +1628,13 @@ app.whenReady().then(() => {
       return normalizeMembersResponse(await requestJson<CommunityMembersResponse>(await configuredOrigin(), "/v1/community/members"));
     } catch (error: unknown) {
       return apiFailure(error, "Unable to load community members.");
+    }
+  });
+  ipcMain.handle("community:get-voice-presence", async (): Promise<VoicePresenceResponse | AuthError> => {
+    try {
+      return normalizeVoicePresenceResponse(await requestJson<unknown>(await configuredOrigin(), "/v1/community/voice-presence"));
+    } catch (error: unknown) {
+      return apiFailure(error, "Unable to load voice channel occupants.");
     }
   });
   ipcMain.handle("community:create-invite", async (_event, expiresInSeconds: unknown): Promise<InviteResponse | AuthError> => {

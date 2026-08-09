@@ -140,7 +140,7 @@ export async function deactivateMemberAccount(
       `UPDATE users
           SET username = 'deleted-' || replace(id::text, '-', ''),
               display_name = 'Deleted User', password_hash = $1,
-              status = 'offline', is_active = false, updated_at = now()
+              is_active = false, updated_at = now()
         WHERE id = $2 AND is_active
         RETURNING id`,
       [disabledPasswordHash, target.userId],

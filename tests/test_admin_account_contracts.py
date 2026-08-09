@@ -31,6 +31,7 @@ class AdminAccountContracts(unittest.TestCase):
         ):
             self.assertIn(contract, service)
         self.assertNotIn("DELETE FROM users", service)
+        self.assertNotIn("status = 'offline'", service)
 
     def test_api_and_electron_bridge_use_narrow_validated_operations(self) -> None:
         http = (ROOT / "server/http-server.ts").read_text(encoding="utf-8")
@@ -54,6 +55,17 @@ class AdminAccountContracts(unittest.TestCase):
         self.assertIn("Clear voice restrictions", renderer)
         self.assertIn("This is server state, not a desktop cache", renderer)
         self.assertIn("Messages and audit records remain", renderer)
+        self.assertIn("await window.freecord.getMembers()", renderer)
+        self.assertIn("requestId", renderer)
+        self.assertNotIn('user.role === "admin" && ["channels.manage"', renderer)
+
+    def test_server_errors_keep_safe_request_diagnostics(self) -> None:
+        bridge = (ROOT / "apps/desktop/src/shared/bridge.ts").read_text(encoding="utf-8")
+        main = (ROOT / "apps/desktop/src/main/main.ts").read_text(encoding="utf-8")
+        for field in ("status?: number", "serverCode?: string", "requestId?: string"):
+            self.assertIn(field, bridge)
+        self.assertIn("class ApiRequestError extends Error", main)
+        self.assertIn("x-request-id", main)
 
 
 if __name__ == "__main__":

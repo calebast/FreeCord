@@ -4,6 +4,15 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.11 - 2026-08-09
+
+- Show permission-filtered occupants beneath every visible voice channel without making hidden client room connections.
+- Keep the channel list independently scrollable while voice controls and the profile/settings footer remain fixed.
+- Reveal the add-reaction control after a one-second message hover and add a subtle message hover outline.
+- Refresh the settings layout with clearer navigation, grouped cards, labels, focus states, and responsive behavior.
+- Fix account deactivation against the current PostgreSQL status constraint, refresh authoritative member data, and surface safe server request references when it fails.
+- Defer Linux desktop-audio streaming after physical testing still reproduced microphone/self-audio capture instead of the intended application mix.
+
 ## 0.8.0-alpha.10 - 2026-08-09
 
 - Synchronize Venmic source creation and target native PipeWire capture by the exact new object serial, preventing microphone fallback when source creation races or multiple FreeCord instances exist.

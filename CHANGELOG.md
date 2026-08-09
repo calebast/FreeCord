@@ -4,6 +4,12 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.7 - 2026-08-09
+
+- Match Linux stream audio by PipeWire playback class instead of direct default-speaker topology, fixing silent streams through WirePlumber virtual and effects routing.
+- Explicitly exclude microphone capture streams and FreeCord playback from the automatic Linux stream mix.
+- Redirect Chromium's Linux `RecordStream` node to the virtual application-audio source instead of allowing it to remain attached to the microphone.
+
 ## 0.8.0-alpha.6 - 2026-08-09
 
 - Replaced manual KDE stream-audio routing with an automatic native PipeWire application-audio patchbay on Linux.

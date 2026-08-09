@@ -9,7 +9,7 @@
 | Mute/deafen and volume | Supported | Supported |
 | RNNoise | Supported at 48 kHz; CPU cost varies | Supported at 48 kHz; CPU cost varies |
 | Screen selection | In-app Electron picker | KDE xdg-desktop-portal picker |
-| Screen audio | Electron/Chromium system loopback capture with best-effort own-app exclusion | Automatic PipeWire application-audio patchbay; FreeCord voice is excluded by audio-service PID |
+| Screen audio | Electron/Chromium system loopback capture with best-effort own-app exclusion | Automatic PipeWire playback-stream patchbay; microphones and FreeCord voice are excluded |
 | Wayland | Not applicable | Primary supported session; Vulkan is disabled for stability |
 | X11 | Not applicable | Not release-qualified |
 | Global push-to-talk | Not release-qualified | Not release-qualified; compositor restrictions apply |
@@ -24,6 +24,6 @@ chmod +x FreeCord-*-linux-x86_64.AppImage
 
 On KDE Wayland, ensure `pipewire`, `wireplumber`, `xdg-desktop-portal`, and `xdg-desktop-portal-kde` are active. Do not force Vulkan; FreeCord applies conservative Chromium GPU flags because Wayland/Vulkan combinations have caused hard crashes on tested systems.
 
-The Wayland portal provides screen video but not a dependable desktop-audio track. FreeCord therefore uses a bundled native PipeWire patchbay to copy playback applications on the default speaker into a temporary stereo capture source. It dynamically follows new playback streams and excludes Electron's audio-service PID so participant voices are not retransmitted. No KDE routing changes are required. PipeWire and `pipewire-pulse` must be active.
+The Wayland portal provides screen video but not a dependable desktop-audio track. FreeCord therefore uses a bundled native PipeWire patchbay to copy application playback streams into a temporary stereo capture source. It dynamically follows new playback streams and excludes input streams plus Electron's audio-service PID so microphones and participant voices are not retransmitted. The playback match does not depend on a direct hardware-speaker link, allowing WirePlumber virtual and effects routing. No KDE routing changes are required. PipeWire and `pipewire-pulse` must be active.
 
 The helpers under `deploy/cachyos/` can create virtual audio devices for a controlled VM smoke test. They are test-only and do not replace verification on real hardware.

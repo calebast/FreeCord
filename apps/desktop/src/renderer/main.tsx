@@ -1496,7 +1496,7 @@ function App(): React.JSX.Element {
               <h3>Voice &amp; Audio</h3>
               <label>Microphone<select value={audioSettings.microphoneId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, microphoneId: event.target.value })}><option value="">System default</option>{voiceState.microphoneDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
               <label>Speaker<select value={audioSettings.outputId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, outputId: event.target.value })}><option value="">System default</option>{voiceState.outputDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
-              <div className="settings-info"><strong>Linux PipeWire stream audio</strong><p className="hint">FreeCord automatically captures applications playing through the default speaker while excluding FreeCord voice. No KDE audio routing changes are needed.</p></div>
+              <div className="settings-info"><strong>Linux PipeWire stream audio</strong><p className="hint">FreeCord automatically captures application playback while excluding microphones and FreeCord voice. No KDE audio routing changes are needed.</p></div>
               <label>Input sensitivity<input type="range" min="0" max="1" step="0.01" value={audioSettings.inputSensitivity} onChange={(event) => void saveAudioPreferences({ ...audioSettings, inputSensitivity: Number(event.target.value) })} /></label>
               <p className="hint">Device IDs are stored locally and automatically fall back to the system default if a device is disconnected.</p>
             </div>

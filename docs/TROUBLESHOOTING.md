@@ -14,7 +14,7 @@ This is normally DNS, NAT, certificate, or UDP forwarding—not an API-port issu
 
 ## CachyOS screen sharing fails
 
-Install and start PipeWire, WirePlumber, `pipewire-pulse`, `xdg-desktop-portal`, and `xdg-desktop-portal-kde`, then log out and back in after changing portal packages. FreeCord automatically captures applications playing through the default speaker; no KDE routing is required. If audio fails, confirm the application is actively playing through the default output before starting the share. Run the AppImage from a terminal and include sanitized logs in a bug report.
+Install and start PipeWire, WirePlumber, `pipewire-pulse`, `xdg-desktop-portal`, and `xdg-desktop-portal-kde`, then log out and back in after changing portal packages. FreeCord automatically captures active application playback; no KDE routing is required. Start audio in the application before or after starting the share. Run the AppImage from a terminal and include sanitized logs in a bug report if the viewer remains silent.
 
 ## Attachments fail
 

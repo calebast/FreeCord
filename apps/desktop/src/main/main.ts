@@ -74,11 +74,13 @@ let filesSurfaceGeneration = 0;
 const linuxScreenAudioSourceName = "vencord-screen-share";
 interface LinuxAudioPatchBay {
   link(input: {
+    include: Array<Record<string, string>>;
     exclude: Array<Record<string, string>>;
     ignore_devices: boolean;
     only_speakers: boolean;
     only_default_speakers: boolean;
     mute: boolean;
+    workaround: Array<Record<string, string>>;
   }): boolean;
   unlink(): void;
   unmute(): void;
@@ -214,16 +216,30 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
     const patchBay = loadLinuxAudioPatchBay();
     patchBay.unlink();
     const linked = patchBay.link({
-      // Capture playback applications on the default speaker, but never the
-      // Electron process that plays remote FreeCord participants.
+      // Match playback streams directly instead of requiring a direct link to
+      // the default hardware sink. WirePlumber may route applications through
+      // virtual/effects nodes, which made the speaker-topology filter silently
+      // produce an empty stream on otherwise valid PipeWire installations.
+      include: [
+        { "media.class": "Stream/Output/Audio" },
+      ],
       exclude: [
+        // The PID is the primary boundary. The application-name rule keeps
+        // FreeCord voice excluded if a PipeWire client omits that PID.
         { "application.process.id": audioServicePid },
+        { "application.name": app.getName() },
         { "media.class": "Stream/Input/Audio" },
       ],
       ignore_devices: true,
-      only_speakers: true,
-      only_default_speakers: true,
+      only_speakers: false,
+      only_default_speakers: false,
       mute: true,
+      // Chromium may leave its RecordStream node attached to the microphone
+      // even when getUserMedia requests venmic's exact virtual device ID.
+      // Venmic redirects only that FreeCord recording node to the stream mix.
+      workaround: [
+        { "application.process.id": audioServicePid, "media.name": "RecordStream" },
+      ],
     });
     if (!linked) throw new Error("PipeWire could not create the automatic application-audio source.");
     linuxScreenAudioLinked = true;

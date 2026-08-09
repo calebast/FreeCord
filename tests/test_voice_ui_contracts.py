@@ -122,8 +122,12 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertIn('require(path.join(process.resourcesPath, "venmic.node"))', main)
         self.assertIn('entry.name === "Audio Service"', main)
         self.assertIn('{ "application.process.id": audioServicePid }', main)
+        self.assertIn('{ "application.name": app.getName() }', main)
+        self.assertIn('{ "media.class": "Stream/Output/Audio" }', main)
         self.assertIn('{ "media.class": "Stream/Input/Audio" }', main)
-        self.assertIn("only_default_speakers: true", main)
+        self.assertIn("only_speakers: false", main)
+        self.assertIn("only_default_speakers: false", main)
+        self.assertIn('{ "application.process.id": audioServicePid, "media.name": "RecordStream" }', main)
         self.assertIn("ignore_devices: true", main)
         self.assertIn('device.label === prepared.outputName', voice)
         self.assertIn("navigator.mediaDevices.getUserMedia", voice)
@@ -151,7 +155,7 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertNotIn("getSettings().restrictOwnAudio", voice)
         self.assertIn('process.platform === "win32" && request.audioRequested', main)
         self.assertIn('{ audio: "loopback" as const }', main)
-        self.assertIn("excluding FreeCord voice", RENDERER.read_text(encoding="utf-8"))
+        self.assertIn("excluding microphones and FreeCord voice", RENDERER.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

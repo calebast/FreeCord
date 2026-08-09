@@ -205,16 +205,33 @@ function loadLinuxAudioPatchBay(): LinuxAudioPatchBay {
   return linuxAudioPatchBay;
 }
 
-function freeCordAudioServicePid(): string | null {
-  const metric = app.getAppMetrics().find((entry) => entry.name === "Audio Service");
-  return metric && Number.isSafeInteger(metric.pid) ? String(metric.pid) : null;
+function freeCordPipeWireExclusions(): Array<Record<string, string>> {
+  // PipeWire does not consistently attribute Electron playback to the Audio
+  // Service process. Depending on Chromium and WirePlumber versions it may use
+  // the browser, renderer, or utility PID instead. Exclude every current
+  // FreeCord process plus stable application/binary/node identities so remote
+  // participant audio can never be fed back into the shared desktop mix.
+  const processIds = new Set<string>([String(process.pid)]);
+  for (const metric of app.getAppMetrics()) {
+    if (Number.isSafeInteger(metric.pid)) processIds.add(String(metric.pid));
+  }
+
+  const applicationNames = new Set([app.getName(), "FreeCord", "freecord-desktop"]);
+  // Do not suppress unrelated Electron applications during source development
+  // merely because they share the generic `electron` executable name.
+  const processBinaries = new Set([...(app.isPackaged ? [path.basename(process.execPath)] : []), "freecord-desktop"]);
+  return [
+    ...[...processIds].map((pid) => ({ "application.process.id": pid })),
+    ...[...applicationNames].filter(Boolean).map((name) => ({ "application.name": name })),
+    ...[...processBinaries].filter(Boolean).map((binary) => ({ "application.process.binary": binary })),
+    { "node.name": "freecord-desktop" },
+    { "media.class": "Stream/Input/Audio" },
+  ];
 }
 
 async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
   if (process.platform !== "linux") return { ok: false, message: "Automatic PipeWire stream audio is only used on Linux." };
   try {
-    const audioServicePid = freeCordAudioServicePid();
-    if (!audioServicePid) throw new Error("FreeCord's audio service could not be identified safely.");
     const patchBay = loadLinuxAudioPatchBay();
     patchBay.unlink();
     const linked = patchBay.link({
@@ -225,13 +242,7 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
       include: [
         { "media.class": "Stream/Output/Audio" },
       ],
-      exclude: [
-        // The PID is the primary boundary. The application-name rule keeps
-        // FreeCord voice excluded if a PipeWire client omits that PID.
-        { "application.process.id": audioServicePid },
-        { "application.name": app.getName() },
-        { "media.class": "Stream/Input/Audio" },
-      ],
+      exclude: freeCordPipeWireExclusions(),
       ignore_devices: true,
       only_speakers: false,
       only_default_speakers: false,

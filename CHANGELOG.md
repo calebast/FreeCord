@@ -4,6 +4,11 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.9 - 2026-08-09
+
+- Prevent Linux screen-share audio from feeding participant voice back to the room by excluding every FreeCord process plus stable PipeWire application, binary, and node identities.
+- Preserve native PipeWire application-audio capture while covering Electron/WirePlumber process-attribution differences across CachyOS systems.
+
 ## 0.8.0-alpha.8 - 2026-08-09
 
 - Capture the automatic Linux PipeWire application mix with native `pw-record` instead of a Chromium `RecordStream`.

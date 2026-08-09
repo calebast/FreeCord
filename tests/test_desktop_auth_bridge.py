@@ -30,6 +30,8 @@ class DesktopAuthBridgeInvariantTests(unittest.TestCase):
         remove_channels = re.findall(r'ipcRenderer\.removeListener\("([^"]+)", wrapped\)', self.preload)
         self.assertEqual(
             {
+                "audio:linux-screen-data",
+                "audio:linux-screen-error",
                 "realtime:event",
                 "window:fullscreen-changed",
             },

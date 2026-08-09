@@ -14,6 +14,21 @@ const bridge: FreeCordBridge = {
   prepareLinuxScreenAudio: () => ipcRenderer.invoke("audio:prepare-linux-screen"),
   unmuteLinuxScreenAudio: () => ipcRenderer.invoke("audio:unmute-linux-screen"),
   releaseLinuxScreenAudio: () => ipcRenderer.invoke("audio:release-linux-screen"),
+  onLinuxScreenAudioData: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      if (!(payload instanceof Uint8Array)) return;
+      listener(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer);
+    };
+    ipcRenderer.on("audio:linux-screen-data", wrapped);
+    return () => ipcRenderer.removeListener("audio:linux-screen-data", wrapped);
+  },
+  onLinuxScreenAudioError: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, message: unknown) => {
+      if (typeof message === "string" && message.length <= 300) listener(message);
+    };
+    ipcRenderer.on("audio:linux-screen-error", wrapped);
+    return () => ipcRenderer.removeListener("audio:linux-screen-error", wrapped);
+  },
   getServerSettings: () => ipcRenderer.invoke("settings:get-server"),
   saveServerSettings: (input) => ipcRenderer.invoke("settings:save-server", input),
   clearServerSettings: () => ipcRenderer.invoke("settings:clear-server"),

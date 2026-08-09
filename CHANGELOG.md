@@ -4,6 +4,12 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.8 - 2026-08-09
+
+- Capture the automatic Linux PipeWire application mix with native `pw-record` instead of a Chromium `RecordStream`.
+- Remove the ambiguous Chromium recorder redirect that could publish the user's microphone as screen audio on some WirePlumber graphs.
+- Preserve automatic application discovery, stereo audio, microphone exclusion, and FreeCord voice isolation without manual KDE routing.
+
 ## 0.8.0-alpha.7 - 2026-08-09
 
 - Match Linux stream audio by PipeWire playback class instead of direct default-speaker topology, fixing silent streams through WirePlumber virtual and effects routing.

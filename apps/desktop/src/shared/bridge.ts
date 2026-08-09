@@ -362,6 +362,8 @@ export interface FreeCordBridge {
   prepareLinuxScreenAudio(): Promise<LinuxScreenAudioResult>;
   unmuteLinuxScreenAudio(): Promise<void>;
   releaseLinuxScreenAudio(): Promise<void>;
+  onLinuxScreenAudioData(listener: (chunk: ArrayBuffer) => void): () => void;
+  onLinuxScreenAudioError(listener: (message: string) => void): () => void;
   getServerSettings(): Promise<ServerSettings>;
   saveServerSettings(input: ServerSettingsInput): Promise<SettingsResult | SettingsError>;
   clearServerSettings(): Promise<SettingsResult | SettingsError>;

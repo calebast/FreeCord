@@ -18,6 +18,7 @@ import { FreeCordRnnoiseProcessor } from "./rnnoise-processor";
 import { LocalSpeakingSignal, RemoteSpeakingSignals, SPEAKING_SIGNAL_TOPIC } from "./speaking-signal";
 // Keep this as a packaged same-origin asset. A data: URL would be rejected by
 // the renderer's strict script-src policy when AudioWorklet loads the module.
+import pipewireScreenAudioWorkletUrl from "./pipewire-screen-audio-worklet.js?url&no-inline";
 
 export type VoiceStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 
@@ -122,6 +123,10 @@ export class VoiceClient {
   private screenSharePhase: ScreenSharePhase = "idle";
   private ownedScreenVideoTrack: LocalVideoTrack | null = null;
   private ownedScreenAudioTrack: LocalAudioTrack | null = null;
+  private pipewireAudioContext: AudioContext | null = null;
+  private pipewireAudioNode: AudioWorkletNode | null = null;
+  private stopPipewireAudioData: (() => void) | null = null;
+  private stopPipewireAudioErrors: (() => void) | null = null;
   private runtimePlatform: NodeJS.Platform | null = null;
   private audioPreferences: AudioSettings = {
     microphoneId: "",
@@ -502,43 +507,47 @@ export class VoiceClient {
     if (this.runtimePlatform !== "linux") throw new Error("PipeWire stream audio is only available on Linux.");
     const prepared = await window.freecord.prepareLinuxScreenAudio();
     if (!prepared.ok) throw new Error(prepared.message);
-    let captureStream: MediaStream | null = null;
     try {
-      let deviceId: string | undefined;
-      for (let attempt = 0; attempt < 100 && !deviceId; attempt += 1) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        deviceId = devices.find((device) => device.kind === "audioinput" && device.label === prepared.outputName)?.deviceId;
-        if (!deviceId) await new Promise((resolve) => window.setTimeout(resolve, 50));
-      }
-      if (!deviceId) throw new Error("The automatic PipeWire application-audio source did not appear.");
-      const constraints: MediaTrackConstraints = {
-        deviceId: { exact: deviceId },
-        echoCancellation: false,
-        autoGainControl: false,
-        noiseSuppression: false,
-        channelCount: 2,
-        sampleRate: 48_000,
-        sampleSize: 16,
-      };
-      captureStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-      const mediaTrack = captureStream.getAudioTracks()[0];
-      if (!mediaTrack) {
-        captureStream.getTracks().forEach((track) => track.stop());
-        throw new Error("PipeWire did not produce an application-audio track.");
-      }
+      const audioContext = new AudioContext({ latencyHint: "interactive", sampleRate: 48_000 });
+      this.pipewireAudioContext = audioContext;
+      if (audioContext.sampleRate !== 48_000) throw new Error(`PipeWire stream audio requires 48 kHz playback (received ${audioContext.sampleRate} Hz).`);
+      await audioContext.audioWorklet.addModule(pipewireScreenAudioWorkletUrl);
+      const source = new AudioWorkletNode(audioContext, "freecord-pipewire-source", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      this.pipewireAudioNode = source;
+      const destination = audioContext.createMediaStreamDestination();
+      source.connect(destination);
+      this.stopPipewireAudioData = window.freecord.onLinuxScreenAudioData((chunk) => source.port.postMessage(chunk, [chunk]));
+      this.stopPipewireAudioErrors = window.freecord.onLinuxScreenAudioError((message) => {
+        this.update({ screenShareWarning: message, error: message });
+      });
+      await audioContext.resume();
+      const mediaTrack = destination.stream.getAudioTracks()[0];
+      if (!mediaTrack) throw new Error("PipeWire did not produce an application-audio track.");
       return new LocalAudioTrack(mediaTrack, {
         echoCancellation: false,
         autoGainControl: false,
         noiseSuppression: false,
       }, true);
     } catch (error: unknown) {
-      captureStream?.getTracks().forEach((track) => track.stop());
       await this.releasePipeWireAudioCapture();
       throw error;
     }
   }
 
   private async releasePipeWireAudioCapture(): Promise<void> {
+    this.stopPipewireAudioData?.();
+    this.stopPipewireAudioErrors?.();
+    this.stopPipewireAudioData = null;
+    this.stopPipewireAudioErrors = null;
+    this.pipewireAudioNode?.disconnect();
+    this.pipewireAudioNode = null;
+    const audioContext = this.pipewireAudioContext;
+    this.pipewireAudioContext = null;
+    if (audioContext && audioContext.state !== "closed") await audioContext.close().catch(() => undefined);
     await window.freecord.releaseLinuxScreenAudio().catch(() => undefined);
   }
 

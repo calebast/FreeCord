@@ -8,7 +8,7 @@ RUN npm run build --prefix server
 
 FROM node:22-bookworm-slim
 
-ARG APP_VERSION=0.8.0-alpha.7
+ARG APP_VERSION=0.8.0-alpha.8
 
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes postgresql-client util-linux \

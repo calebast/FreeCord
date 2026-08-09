@@ -1,5 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain as rawIpcMain, protocol, safeStorage, session, shell, WebContentsView } from "electron";
 import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -80,7 +82,6 @@ interface LinuxAudioPatchBay {
     only_speakers: boolean;
     only_default_speakers: boolean;
     mute: boolean;
-    workaround: Array<Record<string, string>>;
   }): boolean;
   unlink(): void;
   unmute(): void;
@@ -91,6 +92,7 @@ interface LinuxAudioPatchBayConstructor {
 }
 let linuxAudioPatchBay: LinuxAudioPatchBay | null = null;
 let linuxScreenAudioLinked = false;
+let linuxScreenAudioRecorder: ChildProcessByStdio<null, Readable, Readable> | null = null;
 
 const appRoot = path.resolve(__dirname, "../..");
 const rendererRoot = path.join(appRoot, "dist");
@@ -233,16 +235,47 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
       ignore_devices: true,
       only_speakers: false,
       only_default_speakers: false,
-      mute: true,
-      // Chromium may leave its RecordStream node attached to the microphone
-      // even when getUserMedia requests venmic's exact virtual device ID.
-      // Venmic redirects only that FreeCord recording node to the stream mix.
-      workaround: [
-        { "application.process.id": audioServicePid, "media.name": "RecordStream" },
-      ],
+      // Native capture does not need Venmic's Chromium spike workaround.
+      // Starting unmuted also avoids a link/unmute ordering race on PipeWire.
+      mute: false,
     });
     if (!linked) throw new Error("PipeWire could not create the automatic application-audio source.");
     linuxScreenAudioLinked = true;
+
+    // Record the virtual source natively. Asking Chromium to record this
+    // source can resolve to the already-open microphone RecordStream on some
+    // PipeWire/WirePlumber combinations, which publishes the user's voice as
+    // screen audio. pw-record targets the source by name and cannot fall back
+    // to the microphone.
+    const recorder = spawn("pw-record", [
+      "--raw",
+      "--rate=48000",
+      "--format=s16",
+      "--channels=2",
+      "--channel-map=stereo",
+      "--latency=20ms",
+      `--target=${linuxScreenAudioSourceName}`,
+      "-",
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    linuxScreenAudioRecorder = recorder;
+    recorder.stdout.on("data", (chunk: Buffer) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("audio:linux-screen-data", Buffer.from(chunk));
+    });
+    recorder.stderr.on("data", (chunk: Buffer) => {
+      const message = chunk.toString("utf8").trim();
+      if (message) console.warn("FreeCord PipeWire recorder", message.slice(0, 500));
+    });
+    recorder.once("exit", (code, signal) => {
+      if (linuxScreenAudioRecorder !== recorder) return;
+      linuxScreenAudioRecorder = null;
+      if (linuxScreenAudioLinked && (code !== 0 || signal)) {
+        mainWindow?.webContents.send("audio:linux-screen-error", "Automatic PipeWire stream-audio capture stopped unexpectedly.");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      recorder.once("spawn", resolve);
+      recorder.once("error", reject);
+    });
     return { ok: true, outputName: linuxScreenAudioSourceName };
   } catch (error: unknown) {
     console.error("FreeCord could not prepare automatic Linux stream audio", error);
@@ -253,6 +286,9 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
 
 async function releaseLinuxScreenAudio(): Promise<void> {
   linuxScreenAudioLinked = false;
+  const recorder = linuxScreenAudioRecorder;
+  linuxScreenAudioRecorder = null;
+  if (recorder && !recorder.killed) recorder.kill("SIGTERM");
   try { linuxAudioPatchBay?.unlink(); }
   catch (error: unknown) { console.error("FreeCord could not release automatic Linux stream audio", error); }
 }

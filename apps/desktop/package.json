@@ -32,7 +32,7 @@
     "cross-env": "^7.0.3",
     "electron": "43.3.0",
     "electron-builder": "26.15.3",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.2",
     "vite": "^6.3.5",
     "wait-on": "^8.0.3"
   },

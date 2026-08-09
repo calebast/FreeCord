@@ -424,6 +424,7 @@ function App(): React.JSX.Element {
     void Promise.all([window.freecord.getRuntimeInfo(), window.freecord.getServerSettings(), window.freecord.getSessionState(), window.freecord.getAudioSettings()]).then(([info, savedSettings, sessionState, savedAudio]) => {
       setRuntime(`FreeCord ${info.appVersion} · ${info.platform}`);
       setRuntimePlatform(info.platform);
+      voice.setRuntimePlatform(info.platform);
       setSettings(savedSettings);
       setServerOrigin(savedSettings.serverOrigin ?? "");
       setAllowInsecureLocalhost(savedSettings.allowInsecureLocalhost);

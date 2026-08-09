@@ -4,6 +4,10 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.5 - 2026-08-09
+
+- Restored the previously working Electron loopback audio path on Windows while keeping isolated PipeWire capture Linux-only.
+
 ## 0.8.0-alpha.4 - 2026-08-09
 
 - Restored native Electron fullscreen with synchronized compositor/window events.

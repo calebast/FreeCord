@@ -119,7 +119,7 @@ class VoiceUiContractTests(unittest.TestCase):
         renderer = RENDERER.read_text(encoding="utf-8")
         main = MAIN.read_text(encoding="utf-8")
         worklet = (ROOT / "apps" / "desktop" / "src" / "renderer" / "pipewire-screen-audio-worklet.js").read_text(encoding="utf-8")
-        self.assertIn("captureDesktopAudioInput", voice)
+        self.assertIn("captureLinuxPipeWireAudio", voice)
         self.assertIn('"module-null-sink"', main)
         self.assertIn('"module-loopback"', main)
         self.assertIn('spawn("pw-record"', main)
@@ -138,11 +138,17 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertIn("FreeCord_Stream_Audio", renderer)
         self.assertNotIn("screenAudioInputId", self.source)
 
-    def test_screen_audio_excludes_freecord_voice_or_fails_closed(self) -> None:
+    def test_screen_audio_uses_platform_specific_capture_paths(self) -> None:
         voice = VOICE.read_text(encoding="utf-8")
+        main = MAIN.read_text(encoding="utf-8")
+        self.assertIn('this.runtimePlatform === "linux"', voice)
+        self.assertIn("this.state.screenShareAudioEnabled && !usePipeWireAudio", voice)
+        self.assertIn("if (usePipeWireAudio && !audioTrack)", voice)
+        self.assertGreaterEqual(voice.count("if (usePipeWireAudio) await this.releasePipeWireAudioCapture()"), 6)
         self.assertIn("restrictOwnAudio: true", voice)
-        self.assertIn("settings.restrictOwnAudio !== true", voice)
-        self.assertIn("desktop audio was disabled to prevent call audio from echoing", voice)
+        self.assertNotIn("getSettings().restrictOwnAudio", voice)
+        self.assertIn('process.platform === "win32" && request.audioRequested', main)
+        self.assertIn('{ audio: "loopback" as const }', main)
         self.assertIn("FreeCord voice remains on your normal speaker and is excluded", RENDERER.read_text(encoding="utf-8"))
 
 

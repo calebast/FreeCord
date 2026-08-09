@@ -9,7 +9,7 @@
 | Mute/deafen and volume | Supported | Supported |
 | RNNoise | Supported at 48 kHz; CPU cost varies | Supported at 48 kHz; CPU cost varies |
 | Screen selection | In-app Electron picker | KDE xdg-desktop-portal picker |
-| Screen audio | System loopback with own-app audio exclusion; fails closed if exclusion is unavailable | Dedicated `FreeCord_Stream_Audio` PipeWire sink captured through `pw-record`; manual application routing required |
+| Screen audio | Electron/Chromium system loopback capture with best-effort own-app exclusion | Dedicated `FreeCord_Stream_Audio` PipeWire sink captured through `pw-record`; manual application routing required |
 | Wayland | Not applicable | Primary supported session; Vulkan is disabled for stability |
 | X11 | Not applicable | Not release-qualified |
 | Global push-to-talk | Not release-qualified | Not release-qualified; compositor restrictions apply |

@@ -127,6 +127,7 @@ export class VoiceClient {
   private pipewireAudioNode: AudioWorkletNode | null = null;
   private stopPipewireAudioData: (() => void) | null = null;
   private stopPipewireAudioErrors: (() => void) | null = null;
+  private runtimePlatform: NodeJS.Platform | null = null;
   private audioPreferences: AudioSettings = {
     microphoneId: "",
     outputId: "",
@@ -139,6 +140,10 @@ export class VoiceClient {
 
   get snapshot(): VoiceState { return this.state; }
   subscribe(listener: (state: VoiceState) => void): () => void { this.listeners.add(listener); listener(this.state); return () => this.listeners.delete(listener); }
+
+  setRuntimePlatform(platform: NodeJS.Platform): void {
+    this.runtimePlatform = platform;
+  }
 
   private update(patch: Partial<VoiceState>): void {
     this.state = { ...this.state, ...patch };
@@ -249,13 +254,19 @@ export class VoiceClient {
     let capturedTracks: LocalTrack[] = [];
     try {
       const dimensions = settings.resolution === 720 ? { width: 1280, height: 720 } : settings.resolution === 1080 ? { width: 1920, height: 1080 } : { width: 2560, height: 1440 };
+      const usePipeWireAudio = this.runtimePlatform === "linux" && this.state.screenShareAudioEnabled;
       capturedTracks = await room.localParticipant.createScreenTracks({
         video: true,
-        audio: this.state.screenShareAudioEnabled ? {
+        // Windows keeps Electron's known-working native loopback capture.
+        // Linux screen video comes from the portal while audio is captured
+        // independently from FreeCord's isolated PipeWire output.
+        audio: this.state.screenShareAudioEnabled && !usePipeWireAudio ? {
           echoCancellation: false,
           autoGainControl: false,
           noiseSuppression: false,
           voiceIsolation: false,
+          // Best-effort Chromium hint on Windows. Do not reject the resulting
+          // track when getSettings() omits this experimental field.
           restrictOwnAudio: true,
         } : false,
         resolution: { ...dimensions, frameRate: settings.frameRate },
@@ -265,33 +276,25 @@ export class VoiceClient {
 
       if (!this.isCurrentScreenShareOperation(room, generation)) {
         await this.releaseScreenTracks(room, capturedTracks);
+        if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
         return;
       }
 
       const videoTrack = capturedTracks.find((track): track is LocalVideoTrack => track.source === Track.Source.ScreenShare && track.kind === Track.Kind.Video);
       let audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio);
       let desktopAudioCaptureWarning: string | null = null;
-      if (this.state.screenShareAudioEnabled && !audioTrack) {
+      if (usePipeWireAudio && !audioTrack) {
         try {
-          audioTrack = await this.captureDesktopAudioInput();
+          audioTrack = await this.captureLinuxPipeWireAudio();
           if (audioTrack) capturedTracks.push(audioTrack);
           else desktopAudioCaptureWarning = "The dedicated PipeWire stream-audio source did not return an audio track.";
         } catch (error: unknown) {
           desktopAudioCaptureWarning = error instanceof Error ? error.message : "The desktop-audio source could not be captured.";
         }
       }
-      if (audioTrack && /Windows/i.test(navigator.userAgent)) {
-        const settings = audioTrack.mediaStreamTrack.getSettings() as MediaTrackSettings & { restrictOwnAudio?: boolean };
-        if (settings.restrictOwnAudio !== true) {
-          const unsafeAudioTrack = audioTrack;
-          capturedTracks = capturedTracks.filter((track) => track !== unsafeAudioTrack);
-          await this.releaseScreenTracks(room, [unsafeAudioTrack]);
-          audioTrack = undefined;
-          desktopAudioCaptureWarning = "FreeCord voice isolation was unavailable, so desktop audio was disabled to prevent call audio from echoing into the stream.";
-        }
-      }
       if (!this.isCurrentScreenShareOperation(room, generation)) {
         await this.releaseScreenTracks(room, capturedTracks);
+        if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
         return;
       }
       if (!videoTrack) throw new Error("The selected source did not provide a screen video track.");
@@ -307,6 +310,7 @@ export class VoiceClient {
 
       if (!this.isCurrentScreenShareOperation(room, generation)) {
         await this.releaseScreenTracks(room, capturedTracks);
+        if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
         return;
       }
       if (!videoPublication.track || videoPublication.track.kind !== Track.Kind.Video) throw new Error("Screen video was not published.");
@@ -322,14 +326,17 @@ export class VoiceClient {
             await room.localParticipant.publishTrack(audioTrack, { source: Track.Source.ScreenShareAudio });
             if (!this.isCurrentScreenShareOperation(room, generation)) {
               await this.releaseScreenTracks(room, [videoTrack, audioTrack]);
+              if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
               return;
             }
           } catch (error: unknown) {
             if (!this.isCurrentScreenShareOperation(room, generation)) {
               await this.releaseScreenTracks(room, [videoTrack, audioTrack]);
+              if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
               return;
             }
             await this.releaseScreenTracks(room, [audioTrack]);
+            if (usePipeWireAudio) await this.releasePipeWireAudioCapture();
             if (this.ownedScreenAudioTrack === audioTrack) this.ownedScreenAudioTrack = null;
             const detail = error instanceof Error ? `: ${error.message}` : ".";
             warning = `Screen video is live, but desktop audio could not be published${detail}`;
@@ -495,7 +502,8 @@ export class VoiceClient {
     };
   }
 
-  private async captureDesktopAudioInput(): Promise<LocalAudioTrack | undefined> {
+  private async captureLinuxPipeWireAudio(): Promise<LocalAudioTrack | undefined> {
+    if (this.runtimePlatform !== "linux") throw new Error("PipeWire stream audio is only available on Linux.");
     const prepared = await window.freecord.prepareLinuxScreenAudio();
     if (!prepared.ok) throw new Error(prepared.message);
     try {

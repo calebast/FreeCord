@@ -4,6 +4,12 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.10 - 2026-08-09
+
+- Synchronize Venmic source creation and target native PipeWire capture by the exact new object serial, preventing microphone fallback when source creation races or multiple FreeCord instances exist.
+- Keep the streamer's screen-audio publication out of their local viewer while continuing to deliver it to remote participants.
+- Publish Linux desktop audio as a dedicated mono generated track, avoiding the WebAudio recorder node and Opus negotiation collision with the microphone track.
+
 ## 0.8.0-alpha.9 - 2026-08-09
 
 - Prevent Linux screen-share audio from feeding participant voice back to the room by excluding every FreeCord process plus stable PipeWire application, binary, and node identities.

@@ -92,6 +92,7 @@ interface LinuxAudioPatchBayConstructor {
 }
 let linuxAudioPatchBay: LinuxAudioPatchBay | null = null;
 let linuxScreenAudioLinked = false;
+let linuxScreenAudioSourceSerial: string | null = null;
 let linuxScreenAudioRecorder: ChildProcessByStdio<null, Readable, Readable> | null = null;
 
 const appRoot = path.resolve(__dirname, "../..");
@@ -229,11 +230,74 @@ function freeCordPipeWireExclusions(): Array<Record<string, string>> {
   ];
 }
 
+async function pipeWireGraph(): Promise<unknown[]> {
+  const output = await new Promise<string>((resolve, reject) => {
+    const dump = spawn("pw-dump", [], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => { dump.kill("SIGTERM"); reject(new Error("PipeWire graph inspection timed out.")); }, 2_000);
+    dump.stdout.setEncoding("utf8");
+    dump.stderr.setEncoding("utf8");
+    dump.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > 8 * 1024 * 1024) {
+        dump.kill("SIGTERM");
+        reject(new Error("PipeWire graph inspection exceeded its safe output limit."));
+      }
+    });
+    dump.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    dump.once("error", (error) => { clearTimeout(timeout); reject(error); });
+    dump.once("exit", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve(stdout);
+      else reject(new Error(stderr.trim().slice(0, 500) || `pw-dump exited with code ${code ?? "unknown"}.`));
+    });
+  });
+  const parsed: unknown = JSON.parse(output);
+  if (!Array.isArray(parsed)) throw new Error("PipeWire returned an invalid graph description.");
+  return parsed;
+}
+
+async function linuxScreenAudioSourceSerials(): Promise<string[]> {
+  const serials: string[] = [];
+  for (const item of await pipeWireGraph()) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as { type?: unknown; info?: { props?: Record<string, unknown> } };
+    const props = record.info?.props;
+    if (record.type !== "PipeWire:Interface:Node" || !props) continue;
+    if (props["node.name"] !== linuxScreenAudioSourceName || props["media.class"] !== "Audio/Source/Virtual") continue;
+    const serial = props["object.serial"];
+    if ((typeof serial === "string" && serial) || (typeof serial === "number" && Number.isSafeInteger(serial))) serials.push(String(serial));
+  }
+  return serials;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForNewLinuxScreenAudioSource(existingSerials: Set<string>): Promise<string> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const createdSerials = (await linuxScreenAudioSourceSerials()).filter((serial) => !existingSerials.has(serial));
+    if (createdSerials.length === 1) return createdSerials[0]!;
+    if (createdSerials.length > 1) throw new Error("FreeCord found multiple newly-created PipeWire application-audio sources.");
+    await delay(25);
+  }
+  throw new Error("FreeCord timed out waiting for its dedicated PipeWire application-audio source.");
+}
+
 async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
   if (process.platform !== "linux") return { ok: false, message: "Automatic PipeWire stream audio is only used on Linux." };
   try {
     const patchBay = loadLinuxAudioPatchBay();
-    patchBay.unlink();
+    // A retry must never leave an earlier recorder or virtual source alive.
+    // Duplicate recorders can outlive a failed share and one may reconnect to
+    // the default microphone after its original target disappears.
+    await releaseLinuxScreenAudio();
+    // Venmic's link/unlink methods enqueue work on its PipeWire thread. Observe
+    // PipeWire's graph directly so the recorder cannot race source creation.
+    const existingSourceSerials = new Set(await linuxScreenAudioSourceSerials());
     const linked = patchBay.link({
       // Match playback streams directly instead of requiring a direct link to
       // the default hardware sink. WirePlumber may route applications through
@@ -251,13 +315,16 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
       mute: false,
     });
     if (!linked) throw new Error("PipeWire could not create the automatic application-audio source.");
+    const screenAudioTarget = await waitForNewLinuxScreenAudioSource(existingSourceSerials);
+    linuxScreenAudioSourceSerial = screenAudioTarget;
     linuxScreenAudioLinked = true;
 
     // Record the virtual source natively. Asking Chromium to record this
     // source can resolve to the already-open microphone RecordStream on some
     // PipeWire/WirePlumber combinations, which publishes the user's voice as
-    // screen audio. pw-record targets the source by name and cannot fall back
-    // to the microphone.
+    // screen audio. Target the exact newly-created object serial: using the
+    // shared node name can race source creation or select another FreeCord
+    // instance, allowing WirePlumber to fall back to the default microphone.
     const recorder = spawn("pw-record", [
       "--raw",
       "--rate=48000",
@@ -265,7 +332,7 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
       "--channels=2",
       "--channel-map=stereo",
       "--latency=20ms",
-      `--target=${linuxScreenAudioSourceName}`,
+      `--target=${screenAudioTarget}`,
       "-",
     ], { stdio: ["ignore", "pipe", "pipe"] });
     linuxScreenAudioRecorder = recorder;
@@ -284,8 +351,22 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
       }
     });
     await new Promise<void>((resolve, reject) => {
-      recorder.once("spawn", resolve);
-      recorder.once("error", reject);
+      let timeout: ReturnType<typeof setTimeout>;
+      const onData = () => finish();
+      const onError = (error: Error) => finish(error);
+      const onExit = () => finish(new Error("The dedicated PipeWire application-audio recorder exited before producing PCM."));
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        recorder.stdout.removeListener("data", onData);
+        recorder.removeListener("error", onError);
+        recorder.removeListener("exit", onExit);
+        if (error) reject(error);
+        else resolve();
+      };
+      timeout = setTimeout(() => finish(new Error("The dedicated PipeWire application-audio source did not produce PCM.")), 3_000);
+      recorder.stdout.once("data", onData);
+      recorder.once("error", onError);
+      recorder.once("exit", onExit);
     });
     return { ok: true, outputName: linuxScreenAudioSourceName };
   } catch (error: unknown) {
@@ -297,10 +378,20 @@ async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
 
 async function releaseLinuxScreenAudio(): Promise<void> {
   linuxScreenAudioLinked = false;
+  const sourceSerial = linuxScreenAudioSourceSerial;
+  linuxScreenAudioSourceSerial = null;
   const recorder = linuxScreenAudioRecorder;
   linuxScreenAudioRecorder = null;
   if (recorder && !recorder.killed) recorder.kill("SIGTERM");
-  try { linuxAudioPatchBay?.unlink(); }
+  try {
+    linuxAudioPatchBay?.unlink();
+    // Wait for this share's transient virtual source to disappear before a new
+    // share can start. Other FreeCord instances have different object serials.
+    if (linuxAudioPatchBay && sourceSerial) {
+      const deadline = Date.now() + 1_000;
+      while (Date.now() < deadline && (await linuxScreenAudioSourceSerials()).includes(sourceSerial)) await delay(25);
+    }
+  }
   catch (error: unknown) { console.error("FreeCord could not release automatic Linux stream audio", error); }
 }
 

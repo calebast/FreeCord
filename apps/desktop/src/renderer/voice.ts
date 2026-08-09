@@ -16,9 +16,12 @@ import {
 import type { AudioSettings, VoiceTokenResponse } from "../shared/bridge";
 import { FreeCordRnnoiseProcessor } from "./rnnoise-processor";
 import { LocalSpeakingSignal, RemoteSpeakingSignals, SPEAKING_SIGNAL_TOPIC } from "./speaking-signal";
-// Keep this as a packaged same-origin asset. A data: URL would be rejected by
-// the renderer's strict script-src policy when AudioWorklet loads the module.
-import pipewireScreenAudioWorkletUrl from "./pipewire-screen-audio-worklet.js?url&no-inline";
+
+interface GeneratedAudioTrack extends MediaStreamTrack {
+  readonly writable: WritableStream<AudioData>;
+}
+
+type AudioTrackGeneratorConstructor = new (options: { kind: "audio" }) => GeneratedAudioTrack;
 
 export type VoiceStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 
@@ -123,8 +126,11 @@ export class VoiceClient {
   private screenSharePhase: ScreenSharePhase = "idle";
   private ownedScreenVideoTrack: LocalVideoTrack | null = null;
   private ownedScreenAudioTrack: LocalAudioTrack | null = null;
-  private pipewireAudioContext: AudioContext | null = null;
-  private pipewireAudioNode: AudioWorkletNode | null = null;
+  private pipewireAudioGenerator: GeneratedAudioTrack | null = null;
+  private pipewireAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
+  private pipewireAudioWriteQueue: Promise<void> = Promise.resolve();
+  private pipewireAudioGeneration = 0;
+  private pipewireAudioFrames = 0;
   private stopPipewireAudioData: (() => void) | null = null;
   private stopPipewireAudioErrors: (() => void) | null = null;
   private runtimePlatform: NodeJS.Platform | null = null;
@@ -508,26 +514,45 @@ export class VoiceClient {
     const prepared = await window.freecord.prepareLinuxScreenAudio();
     if (!prepared.ok) throw new Error(prepared.message);
     try {
-      const audioContext = new AudioContext({ latencyHint: "interactive", sampleRate: 48_000 });
-      this.pipewireAudioContext = audioContext;
-      if (audioContext.sampleRate !== 48_000) throw new Error(`PipeWire stream audio requires 48 kHz playback (received ${audioContext.sampleRate} Hz).`);
-      await audioContext.audioWorklet.addModule(pipewireScreenAudioWorkletUrl);
-      const source = new AudioWorkletNode(audioContext, "freecord-pipewire-source", {
-        numberOfInputs: 0,
-        numberOfOutputs: 1,
-        outputChannelCount: [2],
+      const Generator = (globalThis as typeof globalThis & { MediaStreamTrackGenerator?: AudioTrackGeneratorConstructor }).MediaStreamTrackGenerator;
+      if (!Generator || typeof AudioData !== "function") throw new Error("This Electron runtime cannot generate a native PipeWire audio track.");
+      const generator = new Generator({ kind: "audio" });
+      const writer = generator.writable.getWriter();
+      const generation = ++this.pipewireAudioGeneration;
+      this.pipewireAudioGenerator = generator;
+      this.pipewireAudioWriter = writer;
+      this.pipewireAudioFrames = 0;
+      this.pipewireAudioWriteQueue = Promise.resolve();
+      this.stopPipewireAudioData = window.freecord.onLinuxScreenAudioData((chunk) => {
+        if (generation !== this.pipewireAudioGeneration || chunk.byteLength < 4) return;
+        const stereo = new DataView(chunk);
+        const frameCount = Math.floor(chunk.byteLength / 4);
+        const mono = new Int16Array(frameCount);
+        for (let frame = 0; frame < frameCount; frame += 1) {
+          const left = stereo.getInt16(frame * 4, true);
+          const right = stereo.getInt16(frame * 4 + 2, true);
+          mono[frame] = Math.max(-32_768, Math.min(32_767, Math.round((left + right) / 2)));
+        }
+        const timestamp = Math.round(this.pipewireAudioFrames * 1_000_000 / 48_000);
+        this.pipewireAudioFrames += frameCount;
+        const audioFrame = new AudioData({ format: "s16", sampleRate: 48_000, numberOfFrames: frameCount, numberOfChannels: 1, timestamp, data: mono });
+        this.pipewireAudioWriteQueue = this.pipewireAudioWriteQueue.then(async () => {
+          if (generation !== this.pipewireAudioGeneration) return;
+          await writer.write(audioFrame);
+        }).catch((error: unknown) => {
+          if (generation === this.pipewireAudioGeneration) {
+            const message = error instanceof Error ? error.message : "The generated PipeWire audio track stopped.";
+            this.update({ screenShareWarning: message, error: message });
+          }
+        }).finally(() => audioFrame.close());
       });
-      this.pipewireAudioNode = source;
-      const destination = audioContext.createMediaStreamDestination();
-      source.connect(destination);
-      this.stopPipewireAudioData = window.freecord.onLinuxScreenAudioData((chunk) => source.port.postMessage(chunk, [chunk]));
       this.stopPipewireAudioErrors = window.freecord.onLinuxScreenAudioError((message) => {
         this.update({ screenShareWarning: message, error: message });
       });
-      await audioContext.resume();
-      const mediaTrack = destination.stream.getAudioTracks()[0];
-      if (!mediaTrack) throw new Error("PipeWire did not produce an application-audio track.");
-      return new LocalAudioTrack(mediaTrack, {
+      generator.contentHint = "music";
+      return new LocalAudioTrack(generator, {
+        channelCount: 1,
+        sampleRate: 48_000,
         echoCancellation: false,
         autoGainControl: false,
         noiseSuppression: false,
@@ -539,15 +564,21 @@ export class VoiceClient {
   }
 
   private async releasePipeWireAudioCapture(): Promise<void> {
+    this.pipewireAudioGeneration += 1;
     this.stopPipewireAudioData?.();
     this.stopPipewireAudioErrors?.();
     this.stopPipewireAudioData = null;
     this.stopPipewireAudioErrors = null;
-    this.pipewireAudioNode?.disconnect();
-    this.pipewireAudioNode = null;
-    const audioContext = this.pipewireAudioContext;
-    this.pipewireAudioContext = null;
-    if (audioContext && audioContext.state !== "closed") await audioContext.close().catch(() => undefined);
+    const writer = this.pipewireAudioWriter;
+    const generator = this.pipewireAudioGenerator;
+    const pendingWrites = this.pipewireAudioWriteQueue;
+    this.pipewireAudioWriter = null;
+    this.pipewireAudioGenerator = null;
+    this.pipewireAudioWriteQueue = Promise.resolve();
+    this.pipewireAudioFrames = 0;
+    await pendingWrites.catch(() => undefined);
+    if (writer) await writer.close().catch(() => undefined);
+    generator?.stop();
     await window.freecord.releaseLinuxScreenAudio().catch(() => undefined);
   }
 
@@ -562,6 +593,9 @@ export class VoiceClient {
     eventRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       if (publication.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio) {
         (track as RemoteAudioTrack).setVolume(this.volumes.get(`screen:${participant.identity}`) ?? 1);
+        void participant.setAudioOutput(this.state.selectedOutputId ? { deviceId: this.state.selectedOutputId } : {}).catch(() => {
+          this.update({ error: "The selected speaker is unavailable for stream audio; using the system default." });
+        });
         this.refreshScreenShares();
       } else if (publication.source === Track.Source.ScreenShare) {
         this.refreshScreenShares();
@@ -731,8 +765,10 @@ export class VoiceClient {
     }) : [];
     const localVideo = this.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track;
     if (localVideo && localVideo.kind === Track.Kind.Video) {
-      const localAudio = this.room?.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.track;
-      screenShares.unshift({ identity: this.room!.localParticipant.identity, name: this.room!.localParticipant.name || "You", track: localVideo as LocalVideoTrack, ...(localAudio?.kind === Track.Kind.Audio ? { audioTrack: localAudio as LocalAudioTrack } : {}), volume: this.volumes.get(`screen:${this.room!.localParticipant.identity}`) ?? 1 });
+      // The local screen-audio track is publication-only. Never expose it to
+      // the viewer UI, so the streamer cannot monitor or feed back their own
+      // desktop stream while remote participants still receive the track.
+      screenShares.unshift({ identity: this.room!.localParticipant.identity, name: this.room!.localParticipant.name || "You", track: localVideo as LocalVideoTrack, volume: this.volumes.get(`screen:${this.room!.localParticipant.identity}`) ?? 1 });
     }
     this.update({ screenShares });
   }

@@ -4,6 +4,11 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.6 - 2026-08-09
+
+- Replaced manual KDE stream-audio routing with an automatic native PipeWire application-audio patchbay on Linux.
+- Automatically exclude FreeCord's audio-service process from Linux stream audio and follow newly started playback streams.
+
 ## 0.8.0-alpha.5 - 2026-08-09
 
 - Restored the previously working Electron loopback audio path on Windows while keeping isolated PipeWire capture Linux-only.

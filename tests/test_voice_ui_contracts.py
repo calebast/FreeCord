@@ -114,28 +114,30 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertIn("token.permissions.canPublishMicrophone ?? token.permissions.canPublish", self.source)
         self.assertIn("if (canPublishMicrophone)", self.source)
 
-    def test_linux_desktop_audio_uses_an_isolated_pipewire_sink(self) -> None:
+    def test_linux_desktop_audio_uses_an_automatic_pipewire_patchbay(self) -> None:
         voice = VOICE.read_text(encoding="utf-8")
         renderer = RENDERER.read_text(encoding="utf-8")
         main = MAIN.read_text(encoding="utf-8")
-        worklet = (ROOT / "apps" / "desktop" / "src" / "renderer" / "pipewire-screen-audio-worklet.js").read_text(encoding="utf-8")
         self.assertIn("captureLinuxPipeWireAudio", voice)
-        self.assertIn('"module-null-sink"', main)
-        self.assertIn('"module-loopback"', main)
-        self.assertIn('spawn("pw-record"', main)
-        self.assertIn('`--target=${linuxScreenAudioSinkName}.monitor`', main)
-        self.assertIn('mainWindow.webContents.send("audio:linux-screen-data"', main)
-        self.assertIn("audioContext.audioWorklet.addModule(pipewireScreenAudioWorkletUrl)", voice)
-        self.assertIn('pipewire-screen-audio-worklet.js?url&no-inline', voice)
-        self.assertIn('new AudioWorkletNode(audioContext, "freecord-pipewire-source"', voice)
-        self.assertIn('registerProcessor("freecord-pipewire-source"', worklet)
+        self.assertIn('require(path.join(process.resourcesPath, "venmic.node"))', main)
+        self.assertIn('entry.name === "Audio Service"', main)
+        self.assertIn('{ "application.process.id": audioServicePid }', main)
+        self.assertIn('{ "media.class": "Stream/Input/Audio" }', main)
+        self.assertIn("only_default_speakers: true", main)
+        self.assertIn("ignore_devices: true", main)
+        self.assertIn('device.label === prepared.outputName', voice)
+        self.assertIn("navigator.mediaDevices.getUserMedia", voice)
+        self.assertIn("if (usePipeWireAudio) await window.freecord.unmuteLinuxScreenAudio()", voice)
         self.assertIn("echoCancellation: false", voice)
         self.assertIn("autoGainControl: false", voice)
         self.assertIn("noiseSuppression: false", voice)
         self.assertIn("new LocalAudioTrack(mediaTrack", voice)
         self.assertIn("endedAudioTrack", voice)
         self.assertIn("orphanedScreenTracks", voice)
-        self.assertIn("FreeCord_Stream_Audio", renderer)
+        self.assertIn("Application audio is captured automatically", renderer)
+        self.assertIn("No KDE audio routing changes are needed", renderer)
+        self.assertNotIn("pw-record", self.source)
+        self.assertNotIn("module-null-sink", self.source)
         self.assertNotIn("screenAudioInputId", self.source)
 
     def test_screen_audio_uses_platform_specific_capture_paths(self) -> None:
@@ -149,7 +151,7 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertNotIn("getSettings().restrictOwnAudio", voice)
         self.assertIn('process.platform === "win32" && request.audioRequested', main)
         self.assertIn('{ audio: "loopback" as const }', main)
-        self.assertIn("FreeCord voice remains on your normal speaker and is excluded", RENDERER.read_text(encoding="utf-8"))
+        self.assertIn("excluding FreeCord voice", RENDERER.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

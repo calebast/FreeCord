@@ -3,7 +3,6 @@ import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   RuntimeInfo,
   ServerSettings,
@@ -72,9 +71,24 @@ let mainWindow: BrowserWindow | null = null;
 let filesView: WebContentsView | null = null;
 let filesSurfaceVisible = false;
 let filesSurfaceGeneration = 0;
-const linuxScreenAudioSinkName = `freecord_stream_audio_${process.pid}`;
-const linuxScreenAudioOutputName = "FreeCord_Stream_Audio";
-let linuxScreenAudioState: { sinkModuleId: string; loopbackModuleId: string; recorder: ChildProcessWithoutNullStreams | null } | null = null;
+const linuxScreenAudioSourceName = "vencord-screen-share";
+interface LinuxAudioPatchBay {
+  link(input: {
+    exclude: Array<Record<string, string>>;
+    ignore_devices: boolean;
+    only_speakers: boolean;
+    only_default_speakers: boolean;
+    mute: boolean;
+  }): boolean;
+  unlink(): void;
+  unmute(): void;
+}
+interface LinuxAudioPatchBayConstructor {
+  new(): LinuxAudioPatchBay;
+  hasPipeWire(): boolean;
+}
+let linuxAudioPatchBay: LinuxAudioPatchBay | null = null;
+let linuxScreenAudioLinked = false;
 
 const appRoot = path.resolve(__dirname, "../..");
 const rendererRoot = path.join(appRoot, "dist");
@@ -176,92 +190,60 @@ async function saveAudioSettings(settings: AudioSettings): Promise<AudioSettings
   return normalized;
 }
 
-function runPactl(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile("pactl", args, { encoding: "utf8", timeout: 5_000, maxBuffer: 256 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout.trim());
-    });
-  });
+function loadLinuxAudioPatchBay(): LinuxAudioPatchBay {
+  if (linuxAudioPatchBay) return linuxAudioPatchBay;
+  const addon = app.isPackaged
+    ? require(path.join(process.resourcesPath, "venmic.node")) as { PatchBay?: LinuxAudioPatchBayConstructor }
+    : require("@vencord/venmic") as { PatchBay?: LinuxAudioPatchBayConstructor };
+  if (!addon.PatchBay) throw new Error("The automatic PipeWire audio module is unavailable.");
+  if (!addon.PatchBay.hasPipeWire()) throw new Error("pipewire-pulse is not the active audio server.");
+  linuxAudioPatchBay = new addon.PatchBay();
+  return linuxAudioPatchBay;
 }
 
-function validPulseObjectName(value: string): boolean {
-  return /^[A-Za-z0-9._-]{1,128}$/.test(value);
+function freeCordAudioServicePid(): string | null {
+  const metric = app.getAppMetrics().find((entry) => entry.name === "Audio Service");
+  return metric && Number.isSafeInteger(metric.pid) ? String(metric.pid) : null;
 }
 
 async function ensureLinuxScreenAudio(): Promise<LinuxScreenAudioResult> {
-  if (process.platform !== "linux") return { ok: false, message: "Dedicated PipeWire stream audio is only used on Linux." };
+  if (process.platform !== "linux") return { ok: false, message: "Automatic PipeWire stream audio is only used on Linux." };
   try {
-    if (!linuxScreenAudioState) {
-      const defaultSink = await runPactl(["get-default-sink"]);
-      if (!validPulseObjectName(defaultSink)) throw new Error("The default PipeWire output is invalid.");
-      const sinkModuleId = await runPactl([
-        "load-module",
-        "module-null-sink",
-        `sink_name=${linuxScreenAudioSinkName}`,
-        `sink_properties=device.description=${linuxScreenAudioOutputName}`,
-        "rate=48000",
-        "channels=2",
-      ]);
-      if (!/^\d+$/.test(sinkModuleId)) throw new Error("PipeWire did not create the stream-audio output.");
-      try {
-        const loopbackModuleId = await runPactl([
-          "load-module",
-          "module-loopback",
-          `source=${linuxScreenAudioSinkName}.monitor`,
-          `sink=${defaultSink}`,
-          "latency_msec=30",
-        ]);
-        if (!/^\d+$/.test(loopbackModuleId)) throw new Error("PipeWire did not create the stream-audio monitor.");
-        linuxScreenAudioState = { sinkModuleId, loopbackModuleId, recorder: null };
-      } catch (error: unknown) {
-        await runPactl(["unload-module", sinkModuleId]).catch(() => undefined);
-        throw error;
-      }
-    }
-
-    if (!linuxScreenAudioState.recorder) {
-      const recorder = spawn("pw-record", [
-        "--record",
-        "--raw",
-        "--rate=48000",
-        "--format=s16",
-        "--channels=2",
-        "--channel-map=stereo",
-        "--latency=20ms",
-        `--target=${linuxScreenAudioSinkName}.monitor`,
-        "-",
-      ], { stdio: ["pipe", "pipe", "pipe"] });
-      linuxScreenAudioState.recorder = recorder;
-      recorder.stdin.end();
-      recorder.stdout.on("data", (chunk: Buffer) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("audio:linux-screen-data", Buffer.from(chunk));
-      });
-      recorder.stderr.on("data", (chunk: Buffer) => console.error("FreeCord PipeWire capture", chunk.toString("utf8").trim()));
-      recorder.once("exit", (code) => {
-        if (linuxScreenAudioState?.recorder === recorder) linuxScreenAudioState.recorder = null;
-        if (code && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("audio:linux-screen-error", "PipeWire stream-audio capture stopped unexpectedly.");
-      });
-      await new Promise<void>((resolve, reject) => {
-        recorder.once("spawn", resolve);
-        recorder.once("error", reject);
-      });
-    }
-    return { ok: true, outputName: linuxScreenAudioOutputName };
+    const audioServicePid = freeCordAudioServicePid();
+    if (!audioServicePid) throw new Error("FreeCord's audio service could not be identified safely.");
+    const patchBay = loadLinuxAudioPatchBay();
+    patchBay.unlink();
+    const linked = patchBay.link({
+      // Capture playback applications on the default speaker, but never the
+      // Electron process that plays remote FreeCord participants.
+      exclude: [
+        { "application.process.id": audioServicePid },
+        { "media.class": "Stream/Input/Audio" },
+      ],
+      ignore_devices: true,
+      only_speakers: true,
+      only_default_speakers: true,
+      mute: true,
+    });
+    if (!linked) throw new Error("PipeWire could not create the automatic application-audio source.");
+    linuxScreenAudioLinked = true;
+    return { ok: true, outputName: linuxScreenAudioSourceName };
   } catch (error: unknown) {
-    console.error("FreeCord could not prepare isolated Linux stream audio", error);
+    console.error("FreeCord could not prepare automatic Linux stream audio", error);
     await releaseLinuxScreenAudio();
-    return { ok: false, message: "PipeWire stream audio could not start. Install pipewire-pulse, libpulse (pactl), and PipeWire tools (pw-record), then restart FreeCord." };
+    return { ok: false, message: "Automatic application audio could not start. Confirm PipeWire and pipewire-pulse are active, then restart FreeCord." };
   }
 }
 
 async function releaseLinuxScreenAudio(): Promise<void> {
-  const state = linuxScreenAudioState;
-  if (!state) return;
-  linuxScreenAudioState = null;
-  if (state.recorder && !state.recorder.killed) state.recorder.kill("SIGTERM");
-  await runPactl(["unload-module", state.loopbackModuleId]).catch(() => undefined);
-  await runPactl(["unload-module", state.sinkModuleId]).catch(() => undefined);
+  linuxScreenAudioLinked = false;
+  try { linuxAudioPatchBay?.unlink(); }
+  catch (error: unknown) { console.error("FreeCord could not release automatic Linux stream audio", error); }
+}
+
+function unmuteLinuxScreenAudio(): void {
+  if (!linuxScreenAudioLinked || !linuxAudioPatchBay) throw new Error("Automatic Linux stream audio is not active.");
+  linuxAudioPatchBay.unmute();
 }
 
 async function loadOrCreateChatKey(): Promise<string> {
@@ -1229,6 +1211,7 @@ app.whenReady().then(() => {
     mainWindow.setFullScreen(fullscreen);
   });
   ipcMain.handle("audio:prepare-linux-screen", (): Promise<LinuxScreenAudioResult> => ensureLinuxScreenAudio());
+  ipcMain.handle("audio:unmute-linux-screen", (): void => unmuteLinuxScreenAudio());
   ipcMain.handle("audio:release-linux-screen", (): Promise<void> => releaseLinuxScreenAudio());
   ipcMain.handle("settings:get-server", (): Promise<ServerSettings> => loadSettings());
   ipcMain.handle("settings:get-audio", (): Promise<AudioSettings> => loadAudioSettings());

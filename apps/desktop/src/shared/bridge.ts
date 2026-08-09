@@ -360,9 +360,8 @@ export interface FreeCordBridge {
   setWindowFullscreen(fullscreen: boolean): Promise<void>;
   onWindowFullscreenChanged(listener: (fullscreen: boolean) => void): () => void;
   prepareLinuxScreenAudio(): Promise<LinuxScreenAudioResult>;
+  unmuteLinuxScreenAudio(): Promise<void>;
   releaseLinuxScreenAudio(): Promise<void>;
-  onLinuxScreenAudioData(listener: (chunk: ArrayBuffer) => void): () => void;
-  onLinuxScreenAudioError(listener: (message: string) => void): () => void;
   getServerSettings(): Promise<ServerSettings>;
   saveServerSettings(input: ServerSettingsInput): Promise<SettingsResult | SettingsError>;
   clearServerSettings(): Promise<SettingsResult | SettingsError>;

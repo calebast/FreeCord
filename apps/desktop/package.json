@@ -1,6 +1,6 @@
 {
   "name": "freecord-desktop",
-  "version": "0.8.0-alpha.5",
+  "version": "0.8.0-alpha.6",
   "private": true,
   "author": "FreeCord",
   "description": "FreeCord secure desktop client",
@@ -37,9 +37,13 @@
     "wait-on": "^8.0.3"
   },
   "optionalDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "4.62.4"
+    "@rollup/rollup-win32-x64-msvc": "4.62.4",
+    "@vencord/venmic": "7.1.0"
   },
   "overrides": {
+    "@vencord/venmic": {
+      "cmake-js": "8.0.0"
+    },
     "app-builder-lib": {
       "@noble/hashes": "1.8.0"
     }

@@ -20,6 +20,10 @@ files:
   - '!*.yml'
   - '!*.log'
   - '!**/*.map'
+  # The Linux package receives only venmic's native runtime module below;
+  # its npm build toolchain must never ship inside the desktop application.
+  - '!node_modules/@vencord/venmic/**'
+  - '!node_modules/cmake-js/**'
 
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
@@ -51,3 +55,8 @@ linux:
   synopsis: Secure voice communication desktop client
   description: Secure FreeCord desktop client.
   icon: icon.png
+  extraResources:
+    - from: node_modules/@vencord/venmic/prebuilds/venmic-addon-linux-x64/node-napi-v7.node
+      to: venmic.node
+    - from: node_modules/@vencord/venmic/LICENSE
+      to: licenses/venmic-MPL-2.0.txt

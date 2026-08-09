@@ -32,8 +32,6 @@ class DesktopAuthBridgeInvariantTests(unittest.TestCase):
             {
                 "realtime:event",
                 "window:fullscreen-changed",
-                "audio:linux-screen-data",
-                "audio:linux-screen-error",
             },
             set(listener_channels),
         )

@@ -6,7 +6,7 @@
 
 FreeCord is a self-hosted desktop community app for persistent text chat, low-latency voice, screen sharing, roles, and file sharing. One FreeCord installation hosts one private community. The desktop client is built with Electron, React, and TypeScript; the server uses Node.js, PostgreSQL, LiveKit, and MinIO.
 
-> **Early alpha:** FreeCord `0.8.0-alpha.5` is intended for hands-on testing. Installers are unsigned, upgrades may require manual work, and the project has not received an independent security audit.
+> **Early alpha:** FreeCord `0.8.0-alpha.6` is intended for hands-on testing. Installers are unsigned, upgrades may require manual work, and the project has not received an independent security audit.
 
 [Download the latest release](https://github.com/calebast/FreeCord/releases/latest) · [Deployment guide](docs/DEPLOYMENT.md) · [Configuration reference](docs/CONFIGURATION.md) · [Support FreeCord](https://buymeacoffee.com/calebast)
 
@@ -98,4 +98,4 @@ See [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 FreeCord is independent open-source software and is not affiliated with Discord, TeamSpeak, or their owners. Bug reports and focused pull requests are welcome. If the project is useful to you, you can [buy me a coffee](https://buymeacoffee.com/calebast).
 
-FreeCord is distributed under the [BSD 3-Clause License](LICENSE).
+FreeCord is distributed under the [BSD 3-Clause License](LICENSE). Bundled dependency licenses are listed in [Third-party notices](docs/THIRD_PARTY_NOTICES.md).

@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "apps" / "desktop" / "package.json"
 BUILDER = ROOT / "electron-builder.yml"
+VENMIC_NOTICE = ROOT / "docs" / "THIRD_PARTY_NOTICES.md"
 
 
 class DesktopPackagingContractTests(unittest.TestCase):
@@ -33,6 +34,15 @@ class DesktopPackagingContractTests(unittest.TestCase):
 
     def test_packaging_does_not_replace_runtime_entrypoint_with_source(self) -> None:
         self.assertEqual("dist-main/main/main.js", self.package["main"])
+
+    def test_linux_pipewire_runtime_is_bundled_without_its_build_toolchain(self) -> None:
+        self.assertEqual("7.1.0", self.package["optionalDependencies"]["@vencord/venmic"])
+        self.assertIn("node_modules/@vencord/venmic/prebuilds/venmic-addon-linux-x64/node-napi-v7.node", self.builder)
+        self.assertIn("to: venmic.node", self.builder)
+        self.assertIn("!node_modules/@vencord/venmic/**", self.builder)
+        self.assertIn("!node_modules/cmake-js/**", self.builder)
+        self.assertIn("venmic-MPL-2.0.txt", self.builder)
+        self.assertIn("Mozilla Public License 2.0", VENMIC_NOTICE.read_text(encoding="utf-8"))
 
 if __name__ == "__main__":
     unittest.main()

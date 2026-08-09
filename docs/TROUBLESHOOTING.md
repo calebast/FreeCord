@@ -14,7 +14,7 @@ This is normally DNS, NAT, certificate, or UDP forwarding—not an API-port issu
 
 ## CachyOS screen sharing fails
 
-Install and start PipeWire, WirePlumber, `xdg-desktop-portal`, and `xdg-desktop-portal-kde`; log out and back in after changing portal packages. Screen audio availability is portal- and compositor-dependent. Run the AppImage from a terminal and include sanitized logs in a bug report.
+Install and start PipeWire, WirePlumber, `xdg-desktop-portal`, and `xdg-desktop-portal-kde`; log out and back in after changing portal packages. For desktop audio, open Settings → Voice & Audio and select the output sink's “Monitor” source under Desktop audio source. If no monitor appears, confirm the sink monitor is exposed by PipeWire/Pulse compatibility. Run the AppImage from a terminal and include sanitized logs in a bug report.
 
 ## Attachments fail
 

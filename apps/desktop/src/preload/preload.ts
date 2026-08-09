@@ -4,7 +4,6 @@ import type { FreeCordBridge } from "../shared/bridge";
 const bridge: FreeCordBridge = {
   getRuntimeInfo: () => ipcRenderer.invoke("runtime:get-info"),
   openSupportPage: () => ipcRenderer.invoke("runtime:open-support-page"),
-  setWindowFullscreen: (fullscreen) => ipcRenderer.invoke("window:set-fullscreen", fullscreen),
   getServerSettings: () => ipcRenderer.invoke("settings:get-server"),
   saveServerSettings: (input) => ipcRenderer.invoke("settings:save-server", input),
   clearServerSettings: () => ipcRenderer.invoke("settings:clear-server"),

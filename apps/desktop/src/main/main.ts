@@ -134,6 +134,7 @@ function audioSettingsPath(): string { return path.join(app.getPath("userData"),
 const defaultAudioSettings: AudioSettings = {
   microphoneId: "",
   outputId: "",
+  screenAudioInputId: "",
   inputSensitivity: 0.5,
   rnnoiseEnabled: false,
   echoCancellation: true,
@@ -147,6 +148,7 @@ async function loadAudioSettings(): Promise<AudioSettings> {
     return {
       microphoneId: typeof value.microphoneId === "string" ? value.microphoneId.slice(0, 512) : "",
       outputId: typeof value.outputId === "string" ? value.outputId.slice(0, 512) : "",
+      screenAudioInputId: typeof value.screenAudioInputId === "string" ? value.screenAudioInputId.slice(0, 512) : "",
       inputSensitivity: typeof value.inputSensitivity === "number" && Number.isFinite(value.inputSensitivity) ? Math.max(0, Math.min(1, value.inputSensitivity)) : 0.5,
       rnnoiseEnabled: value.rnnoiseEnabled === true,
       echoCancellation: value.echoCancellation !== false,
@@ -160,6 +162,7 @@ async function saveAudioSettings(settings: AudioSettings): Promise<AudioSettings
   const normalized: AudioSettings = {
     microphoneId: typeof settings.microphoneId === "string" ? settings.microphoneId.slice(0, 512) : "",
     outputId: typeof settings.outputId === "string" ? settings.outputId.slice(0, 512) : "",
+    screenAudioInputId: typeof settings.screenAudioInputId === "string" ? settings.screenAudioInputId.slice(0, 512) : "",
     inputSensitivity: typeof settings.inputSensitivity === "number" && Number.isFinite(settings.inputSensitivity) ? Math.max(0, Math.min(1, settings.inputSensitivity)) : 0.5,
     rnnoiseEnabled: settings.rnnoiseEnabled === true,
     echoCancellation: settings.echoCancellation !== false,
@@ -1116,11 +1119,6 @@ app.whenReady().then(() => {
   ipcMain.handle("runtime:open-support-page", async (): Promise<{ ok: true }> => {
     await shell.openExternal(supportUrl);
     return { ok: true };
-  });
-  ipcMain.handle("window:set-fullscreen", (_event, fullscreen: unknown): boolean => {
-    if (!mainWindow || typeof fullscreen !== "boolean") return false;
-    mainWindow.setFullScreen(fullscreen);
-    return mainWindow.isFullScreen();
   });
   ipcMain.handle("settings:get-server", (): Promise<ServerSettings> => loadSettings());
   ipcMain.handle("settings:get-audio", (): Promise<AudioSettings> => loadAudioSettings());

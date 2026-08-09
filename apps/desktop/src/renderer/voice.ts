@@ -61,8 +61,10 @@ export interface VoiceState {
   speaking: boolean;
   microphoneDevices: VoiceDevice[];
   outputDevices: VoiceDevice[];
+  screenAudioDevices: VoiceDevice[];
   selectedMicrophoneId: string;
   selectedOutputId: string;
+  selectedScreenAudioInputId: string;
   rnnoiseActive: boolean;
   audioProcessingBusy: boolean;
   audioProcessingError: string | null;
@@ -82,8 +84,8 @@ const defaultScreenShareSettings: ScreenShareSettings = { resolution: 1080, fram
 
 const initialState: VoiceState = {
   status: "idle", channelId: null, error: null, muted: false, deafened: false,
-  speaking: false, microphoneDevices: [], outputDevices: [], selectedMicrophoneId: "",
-  selectedOutputId: "", rnnoiseActive: false, audioProcessingBusy: false,
+  speaking: false, microphoneDevices: [], outputDevices: [], screenAudioDevices: [], selectedMicrophoneId: "",
+  selectedOutputId: "", selectedScreenAudioInputId: "", rnnoiseActive: false, audioProcessingBusy: false,
   audioProcessingError: null, participants: [], screenSharing: false, screenShareBusy: false,
   screenSharePhase: "idle", screenShareAudioEnabled: true, screenShareWarning: null,
   audioPlaybackBlocked: false, audioPlaybackWarning: null,
@@ -94,6 +96,12 @@ function normalizeLiveKitUrl(value: string): string {
   const url = new URL(value);
   if (url.pathname === "/rtc" || url.pathname === "/rtc/") url.pathname = "/";
   return url.toString().replace(/\/$/, "");
+}
+
+function isDesktopAudioDevice(device: MediaDeviceInfo, microphoneId: string): boolean {
+  return device.kind === "audioinput"
+    && device.deviceId !== microphoneId
+    && /(monitor(?: of)?|loopback|stereo mix|what u hear|output.*capture|desktop audio)/i.test(device.label);
 }
 
 export class VoiceClient {
@@ -123,6 +131,7 @@ export class VoiceClient {
   private audioPreferences: AudioSettings = {
     microphoneId: "",
     outputId: "",
+    screenAudioInputId: "",
     inputSensitivity: 0.5,
     rnnoiseEnabled: false,
     echoCancellation: true,
@@ -143,7 +152,14 @@ export class VoiceClient {
       const [inputs, outputs] = await Promise.all([Room.getLocalDevices("audioinput"), Room.getLocalDevices("audiooutput")]);
       const microphones = inputs.map((device) => ({ deviceId: device.deviceId, label: device.label || "Microphone" }));
       const speakers = outputs.map((device) => ({ deviceId: device.deviceId, label: device.label || "Speaker" }));
-      this.update({ microphoneDevices: microphones, outputDevices: speakers, selectedMicrophoneId: this.state.selectedMicrophoneId || microphones[0]?.deviceId || "", selectedOutputId: this.state.selectedOutputId || speakers[0]?.deviceId || "" });
+      this.update({
+        microphoneDevices: microphones,
+        outputDevices: speakers,
+        screenAudioDevices: inputs.filter((device) => isDesktopAudioDevice(device, this.audioPreferences.microphoneId)).map((device) => ({ deviceId: device.deviceId, label: device.label })),
+        selectedMicrophoneId: this.state.selectedMicrophoneId || microphones[0]?.deviceId || "",
+        selectedOutputId: this.state.selectedOutputId || speakers[0]?.deviceId || "",
+        selectedScreenAudioInputId: this.audioPreferences.screenAudioInputId,
+      });
     } catch (error: unknown) { this.update({ error: error instanceof Error ? error.message : "Audio devices are unavailable." }); }
   }
 
@@ -193,7 +209,7 @@ export class VoiceClient {
     this.room = null;
     this.speakingDataAllowed = false;
     this.screenSharePhase = "idle";
-    this.update({ ...initialState, microphoneDevices: this.state.microphoneDevices, outputDevices: this.state.outputDevices });
+    this.update({ ...initialState, microphoneDevices: this.state.microphoneDevices, outputDevices: this.state.outputDevices, screenAudioDevices: this.state.screenAudioDevices, selectedScreenAudioInputId: this.audioPreferences.screenAudioInputId });
   }
 
   async setMuted(muted: boolean): Promise<void> {
@@ -255,7 +271,21 @@ export class VoiceClient {
       }
 
       const videoTrack = capturedTracks.find((track): track is LocalVideoTrack => track.source === Track.Source.ScreenShare && track.kind === Track.Kind.Video);
-      const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio);
+      let audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio);
+      let desktopAudioCaptureWarning: string | null = null;
+      if (this.state.screenShareAudioEnabled && !audioTrack) {
+        try {
+          audioTrack = await this.captureDesktopAudioInput();
+          if (audioTrack) capturedTracks.push(audioTrack);
+          else desktopAudioCaptureWarning = "No PipeWire/Pulse monitor source was found. Select a desktop-audio source in Voice & Audio settings.";
+        } catch (error: unknown) {
+          desktopAudioCaptureWarning = error instanceof Error ? error.message : "The desktop-audio source could not be captured.";
+        }
+      }
+      if (!this.isCurrentScreenShareOperation(room, generation)) {
+        await this.releaseScreenTracks(room, capturedTracks);
+        return;
+      }
       if (!videoTrack) throw new Error("The selected source did not provide a screen video track.");
 
       this.ownedScreenVideoTrack = videoTrack;
@@ -297,7 +327,7 @@ export class VoiceClient {
             warning = `Screen video is live, but desktop audio could not be published${detail}`;
           }
         } else {
-          warning = "Screen video is live, but the selected source did not provide desktop audio.";
+          warning = `Screen video is live, but desktop audio is unavailable. ${desktopAudioCaptureWarning ?? "The selected source did not provide desktop audio."}`;
         }
       } else if (audioTrack) {
         await this.releaseScreenTracks(room, [audioTrack]);
@@ -373,7 +403,7 @@ export class VoiceClient {
   setAudioPreferences(settings: AudioSettings): void {
     this.audioPreferences = { ...settings };
     this.localSpeakingSignal.setSensitivity(settings.inputSensitivity);
-    this.update({ selectedMicrophoneId: settings.microphoneId, selectedOutputId: settings.outputId });
+    this.update({ selectedMicrophoneId: settings.microphoneId, selectedOutputId: settings.outputId, selectedScreenAudioInputId: settings.screenAudioInputId });
   }
 
   async applyAudioProcessingPreferences(): Promise<void> {
@@ -454,6 +484,33 @@ export class VoiceClient {
     };
   }
 
+  private async captureDesktopAudioInput(): Promise<LocalAudioTrack | undefined> {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => isDesktopAudioDevice(device, this.audioPreferences.microphoneId));
+    const configuredId = this.audioPreferences.screenAudioInputId;
+    const selected = configuredId
+      ? inputs.find((device) => device.deviceId === configuredId)
+      : inputs.find((device) => /(monitor(?: of)?|stereo mix|what u hear|output.*capture|desktop audio)/i.test(device.label));
+    if (!selected) {
+      if (configuredId) throw new Error("The selected desktop-audio source is no longer available.");
+      return undefined;
+    }
+
+    const constraints: MediaTrackConstraints = {
+      deviceId: { exact: selected.deviceId },
+      echoCancellation: false,
+      autoGainControl: false,
+      noiseSuppression: false,
+    };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+    const mediaTrack = stream.getAudioTracks()[0];
+    if (!mediaTrack) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error("The selected desktop-audio source did not provide an audio track.");
+    }
+    return new LocalAudioTrack(mediaTrack, constraints, true);
+  }
+
   private microphoneTrack(): LocalAudioTrack | null {
     const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
     return track instanceof LocalAudioTrack ? track : null;
@@ -495,7 +552,9 @@ export class VoiceClient {
           void this.releaseScreenTracks(room, remainingTracks);
           this.update({ screenSharing: false, screenShareBusy: false, screenSharePhase: "idle" });
         } else if (publication.source === Track.Source.ScreenShareAudio && stillSharing && this.screenSharePhase === "active" && this.state.screenShareAudioEnabled) {
+          const endedAudioTrack = this.ownedScreenAudioTrack;
           this.ownedScreenAudioTrack = null;
+          if (endedAudioTrack) void this.releaseScreenTracks(room, [endedAudioTrack]);
           const warning = "Screen video is live, but the desktop-audio publication ended.";
           this.update({ screenShareWarning: warning, error: warning });
         }
@@ -548,6 +607,8 @@ export class VoiceClient {
       }
     });
     eventRoom.on(RoomEvent.Disconnected, () => {
+      const orphanedScreenTracks = this.takeOwnedScreenTracks();
+      if (orphanedScreenTracks.length > 0) void this.releaseScreenTracks(room, orphanedScreenTracks);
       void this.localSpeakingSignal.stop(false);
       this.localSpeakingHint = false;
       this.remoteSpeakingSignals.clearAll();

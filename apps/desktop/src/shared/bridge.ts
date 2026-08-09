@@ -28,6 +28,7 @@ export interface SettingsError {
 export interface AudioSettings {
   microphoneId: string;
   outputId: string;
+  screenAudioInputId: string;
   inputSensitivity: number;
   rnnoiseEnabled: boolean;
   echoCancellation: boolean;
@@ -352,7 +353,6 @@ export interface AuthResult {
 export interface FreeCordBridge {
   getRuntimeInfo(): Promise<RuntimeInfo>;
   openSupportPage(): Promise<{ ok: true }>;
-  setWindowFullscreen(fullscreen: boolean): Promise<boolean>;
   getServerSettings(): Promise<ServerSettings>;
   saveServerSettings(input: ServerSettingsInput): Promise<SettingsResult | SettingsError>;
   clearServerSettings(): Promise<SettingsResult | SettingsError>;

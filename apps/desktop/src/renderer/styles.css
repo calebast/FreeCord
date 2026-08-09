@@ -97,10 +97,12 @@ small { display: block; margin-top: 22px; color: #858995; }
 .nav-channel .channel-name { width: auto; min-width: 0; flex: 1; overflow: hidden; color: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .nav-channel .unread-count { display: inline-grid; width: auto; min-width: 18px; height: 18px; place-items: center; padding: 0 5px; border-radius: 9px; color: #111318; background: #8b9cff; font-size: 9px; }
 .nav-channel em { margin-left: auto; color: #92d7b0; font-size: 9px; font-style: normal; }
-.channel-admin-row { display: flex; align-items: center; gap: 3px; }
-.channel-admin-row .nav-channel { flex: 1; min-width: 0; }
-.channel-delete-button { width: 24px; padding: 5px 0; color: #aeb3c0; background: transparent; font-size: 15px; }
-.channel-delete-button:hover { color: #f0a5a5; background: #30232b; }
+.channel-context-target, .channel-context-target .nav-channel { width: 100%; }
+.channel-context-menu { position: fixed; z-index: 46; display: grid; width: 200px; gap: 5px; padding: 8px; border: 1px solid #3a4560; border-radius: 9px; color: #dfe2ea; background: #1b2130; box-shadow: 0 14px 34px rgb(0 0 0 / 48%); }
+.channel-context-menu > strong { overflow: hidden; padding: 3px 5px 7px; border-bottom: 1px solid #303a53; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-context-menu button { padding: 7px 8px; color: #cbd0dc; background: #252c3b; text-align: left; font-size: 11px; }
+.channel-context-menu button:hover { color: #fff; background: #303a53; }
+.channel-context-menu button.danger { color: #f0a5a5; }
 .voice-channel-group { margin-bottom: 3px; }
 .voice-channel-members { display: grid; gap: 2px; margin: -2px 0 8px 25px; padding: 2px 0 3px 8px; border-left: 1px solid #33405e; }
 .voice-member { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 5px; border-radius: 5px; color: #858995; font-size: 11px; }
@@ -177,12 +179,6 @@ small { display: block; margin-top: 22px; color: #858995; }
 .assigned-roles { display: grid; gap: 6px; color: #c9cbd1; font-size: 12px; }
 .assigned-roles > div, .member-role-list > div > div { display: flex; flex-wrap: wrap; gap: 5px; }
 .role-chip { display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px; border: 1px solid #46547a; border-radius: 999px; color: #dbe0f0; background: #252d40; font-size: 10px; }
-.channel-editor-list { display: grid; gap: 7px; margin-top: 4px; }
-.channel-editor-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; }
-.channel-editor-row > span { color: #858995; text-align: center; }
-.channel-editor-row input { min-width: 0; }
-.channel-editor-row button { padding: 8px 10px; font-size: 10px; }
-.channel-editor-row .danger { color: #f0a5a5; }
 .member-role-list { display: grid; gap: 6px; padding: 8px; border: 1px solid #2d3342; border-radius: 8px; background: #14171e; }
 .member-role-list > div { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 10px; padding: 7px; border-bottom: 1px solid #252b38; }
 .member-role-list > div:last-child { border-bottom: 0; }
@@ -250,6 +246,13 @@ small { display: block; margin-top: 22px; color: #858995; }
 .screen-viewer-layout nav button.selected { border-color: #8b9cff; color: #fff; background: #303a58; }
 .screen-viewer-overlay.fullscreen .screen-viewer-layout { grid-template-columns: minmax(0, 1fr); }
 .screen-viewer-overlay.fullscreen .screen-viewer-layout nav { display: none; }
+.screen-viewer-overlay.fullscreen { padding: 0; }
+.screen-viewer-overlay.fullscreen > header { display: none; }
+.screen-viewer-overlay.fullscreen .screen-viewer-layout { gap: 0; }
+.screen-viewer-overlay.fullscreen .screen-viewer-stage { border: 0; border-radius: 0; }
+.screen-viewer-overlay.fullscreen .screen-share-controls { display: none; }
+.screen-viewer-exit-fullscreen { position: fixed; z-index: 3; right: 14px; bottom: 14px; padding: 7px 9px; border: 1px solid rgb(255 255 255 / 20%); color: #eef1fa; background: rgb(14 18 27 / 72%); font-size: 10px; opacity: .7; }
+.screen-viewer-exit-fullscreen:hover, .screen-viewer-exit-fullscreen:focus-visible { opacity: 1; }
 .screen-viewer-stage { display: grid; min-width: 0; min-height: 0; place-items: center; border: 1px solid #30394d; border-radius: 10px; background: #080a0f; }
 .screen-viewer-stage .screen-share-tile { width: 100%; height: 100%; min-height: 300px; border: 0; border-radius: 0; }
 .screen-viewer-stage .screen-share-tile video { width: 100%; height: 100%; min-height: 300px; object-fit: contain; }

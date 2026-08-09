@@ -57,6 +57,12 @@ interface VoiceParticipantMenu {
   channelId: string;
 }
 
+interface ChannelContextMenu {
+  x: number;
+  y: number;
+  channel: ChannelMetadata;
+}
+
 function resultMessage(value: unknown): string | undefined {
   return typeof value === "object" && value !== null && "message" in value && typeof value.message === "string" ? value.message : undefined;
 }
@@ -222,6 +228,7 @@ function App(): React.JSX.Element {
   const [audioSettings, setAudioSettings] = React.useState<AudioSettings>({
     microphoneId: "",
     outputId: "",
+    screenAudioInputId: "",
     inputSensitivity: 0.5,
     rnnoiseEnabled: false,
     echoCancellation: true,
@@ -230,11 +237,11 @@ function App(): React.JSX.Element {
   });
   const [newChannelName, setNewChannelName] = React.useState("");
   const [newChannelType, setNewChannelType] = React.useState<"text" | "voice">("text");
-  const [channelNameDrafts, setChannelNameDrafts] = React.useState<Record<string, string>>({});
   const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
   const [reactionPickerMessageId, setReactionPickerMessageId] = React.useState<string | null>(null);
   const [messageMenu, setMessageMenu] = React.useState<{ x: number; y: number; message: ChatMessage } | null>(null);
   const [voiceParticipantMenu, setVoiceParticipantMenu] = React.useState<VoiceParticipantMenu | null>(null);
+  const [channelMenu, setChannelMenu] = React.useState<ChannelContextMenu | null>(null);
   const [pendingImage, setPendingImage] = React.useState<string | null>(null);
   const [giphyOpen, setGiphyOpen] = React.useState(false);
   const [giphyQuery, setGiphyQuery] = React.useState("");
@@ -299,7 +306,7 @@ function App(): React.JSX.Element {
   const chatSoundInitializedRef = React.useRef(false);
 
   React.useEffect(() => {
-    const closeMenus = () => { setMessageMenu(null); setReactionPickerMessageId(null); setVoiceParticipantMenu(null); };
+    const closeMenus = () => { setMessageMenu(null); setReactionPickerMessageId(null); setVoiceParticipantMenu(null); setChannelMenu(null); };
     window.addEventListener("click", closeMenus);
     return () => window.removeEventListener("click", closeMenus);
   }, []);
@@ -336,8 +343,11 @@ function App(): React.JSX.Element {
   }, []);
 
   React.useEffect(() => {
-    screenViewerRef.current?.classList.toggle("fullscreen", screenViewerFullscreen);
-  }, [screenViewerFullscreen, screenViewerOpen]);
+    if (auth.status === "authenticated") return;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    setScreenViewerFullscreen(false);
+    setScreenViewerOpen(false);
+  }, [auth.status]);
 
   React.useEffect(() => {
     return voice.subscribe(setVoiceState);
@@ -346,13 +356,12 @@ function App(): React.JSX.Element {
   React.useEffect(() => {
     if (!settingsOpen) return;
     setProfileDisplayName(auth.user?.displayName ?? "");
-    setChannelNameDrafts(Object.fromEntries(channels.map((channel) => [channel.id, channel.name])));
     const closeSettingsOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSettingsOpen(false);
     };
     window.addEventListener("keydown", closeSettingsOnEscape);
     return () => window.removeEventListener("keydown", closeSettingsOnEscape);
-  }, [settingsOpen, auth.user?.displayName, channels]);
+  }, [settingsOpen, auth.user?.displayName]);
 
   React.useEffect(() => {
     if (auth.status !== "authenticated") {
@@ -932,8 +941,8 @@ function App(): React.JSX.Element {
       setAudioSettings(saved);
       voice.setAudioPreferences(saved);
       if (voiceState.status === "connected") {
-        if (saved.microphoneId) await voice.selectMicrophone(saved.microphoneId);
-        if (saved.outputId) await voice.selectOutput(saved.outputId);
+        if (saved.microphoneId && saved.microphoneId !== audioSettings.microphoneId) await voice.selectMicrophone(saved.microphoneId);
+        if (saved.outputId && saved.outputId !== audioSettings.outputId) await voice.selectOutput(saved.outputId);
         await voice.applyAudioProcessingPreferences();
       }
       setMessage("Audio settings saved.");
@@ -992,9 +1001,9 @@ function App(): React.JSX.Element {
 
   async function deleteChannel(channel: ChannelMetadata): Promise<void> {
     if (!window.confirm(`Delete the ${channel.type} channel #${channel.name}?`)) return;
-    if (voiceState.channelId === channel.id) await voice.leave();
     const result = await window.freecord.deleteChannel(channel.id);
     if ("ok" in result && result.ok) {
+      if (voiceState.channelId === channel.id) await voice.leave();
       const refreshed = await window.freecord.getChannels();
       if ("channels" in refreshed) {
         setChannels(refreshed.channels);
@@ -1005,13 +1014,22 @@ function App(): React.JSX.Element {
   }
 
   async function renameChannel(channel: ChannelMetadata): Promise<void> {
-    const name = channelNameDrafts[channel.id]?.trim();
+    const name = window.prompt(`Rename ${channel.type} channel`, channel.name)?.trim();
     if (!name || name === channel.name) return;
     const result = await window.freecord.updateChannel(channel.id, name);
     if (!("id" in result)) { setMessage(result.message); return; }
     setChannels((current) => current.map((item) => item.id === result.id ? { ...item, ...result } : item));
-    setChannelNameDrafts((current) => ({ ...current, [result.id]: result.name }));
     setMessage(`${result.type === "voice" ? "Voice" : "Text"} channel renamed.`);
+  }
+
+  function openChannelMenu(event: React.MouseEvent, channel: ChannelMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setChannelMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 210)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)),
+      channel,
+    });
   }
 
   function updateScreenShareSetting<K extends keyof VoiceState["screenShareSettings"]>(key: K, value: VoiceState["screenShareSettings"][K]): void {
@@ -1027,12 +1045,25 @@ function App(): React.JSX.Element {
   }
 
   async function toggleScreenViewerFullscreen(): Promise<void> {
+    const viewer = screenViewerRef.current;
     try {
-      const nativeState = await window.freecord.setWindowFullscreen(!screenViewerFullscreen);
-      setScreenViewerFullscreen(nativeState);
-    } catch {
-      setScreenViewerFullscreen((current) => !current);
+      if (!screenViewerFullscreen && viewer?.requestFullscreen) {
+        await viewer.requestFullscreen();
+        return;
+      }
+      if (screenViewerFullscreen && document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? `Full screen is unavailable: ${error.message}` : "Full screen is unavailable.");
     }
+  }
+
+  async function closeScreenViewer(): Promise<void> {
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+    setScreenViewerFullscreen(false);
+    setScreenViewerOpen(false);
   }
 
   async function createInvite(): Promise<void> {
@@ -1353,13 +1384,13 @@ function App(): React.JSX.Element {
         <div className="workspace-grid">
           <aside className={`workspace-sidebar ${voiceState.status !== "idle" ? "voice-connected-sidebar" : ""}`}>
             <div className="panel-heading"><span>CHANNELS</span><span className="channel-count">{channels.length}</span></div>
-            <div className="channel-section"><div className="channel-section-title">TEXT CHANNELS</div>{channelsBusy && <p className="hint">Loading…</p>}{textChannels.map((channel) => <div className="channel-admin-row" key={channel.id}><button className={`nav-channel ${activeView === "chat" && selectedChannel?.id === channel.id ? "selected" : ""}`} type="button" onClick={() => { setActiveView("chat"); setSelectedChannelId(channel.id); setUnreadByChannel((current) => ({ ...current, [channel.id]: 0 })); }}><span>#</span><span className="channel-name">{channel.name}</span>{Boolean(unreadByChannel[channel.id]) && <span className="unread-count" aria-label={`${unreadByChannel[channel.id]} unread messages`}>{Math.min(unreadByChannel[channel.id] ?? 0, 99)}</span>}</button>{canManageChannels && <button className="channel-delete-button" type="button" title={`Delete ${channel.name}`} onClick={() => void deleteChannel(channel)}>×</button>}</div>)}</div>
+            <div className="channel-section"><div className="channel-section-title">TEXT CHANNELS</div>{channelsBusy && <p className="hint">Loading…</p>}{textChannels.map((channel) => <div className="channel-context-target" key={channel.id} title={canManageChannels ? "Right-click to rename or delete" : undefined} onContextMenu={canManageChannels ? (event) => openChannelMenu(event, channel) : undefined}><button className={`nav-channel ${activeView === "chat" && selectedChannel?.id === channel.id ? "selected" : ""}`} type="button" onClick={() => { setActiveView("chat"); setSelectedChannelId(channel.id); setUnreadByChannel((current) => ({ ...current, [channel.id]: 0 })); }}><span>#</span><span className="channel-name">{channel.name}</span>{Boolean(unreadByChannel[channel.id]) && <span className="unread-count" aria-label={`${unreadByChannel[channel.id]} unread messages`}>{Math.min(unreadByChannel[channel.id] ?? 0, 99)}</span>}</button></div>)}</div>
             <div className="channel-section files-section"><div className="channel-section-title">COMMUNITY</div><button className={`nav-channel ${activeView === "server-files" ? "selected" : ""}`} type="button" onClick={() => setActiveView("server-files")}><span>▤</span>Server Files</button><button className={`nav-channel ${activeView === "copyparty" ? "selected" : ""}`} type="button" onClick={() => setActiveView("copyparty")}><span>▣</span>Copyparty</button></div>
             <div className="channel-section"><div className="channel-section-title">VOICE CHANNELS</div>{voiceChannels.map((channel) => {
               const isActiveVoiceChannel = voiceState.channelId === channel.id;
               const showVoiceMembers = isActiveVoiceChannel && voiceState.status !== "idle" && voiceState.status !== "error";
               return <div className="voice-channel-group" key={channel.id}>
-                <div className="channel-admin-row"><button className={`nav-channel ${isActiveVoiceChannel ? "selected" : ""}`} type="button" onClick={() => void joinVoiceChannel(channel)} disabled={channel.canConnect === false || voiceState.status === "connecting"}><span>◖</span>{channel.name}{isActiveVoiceChannel && <em>{voiceState.status}</em>}</button>{canManageChannels && <button className="channel-delete-button" type="button" title={`Delete ${channel.name}`} onClick={() => void deleteChannel(channel)}>×</button>}</div>
+                <div className="channel-context-target" title={canManageChannels ? "Right-click to rename or delete" : undefined} onContextMenu={canManageChannels ? (event) => openChannelMenu(event, channel) : undefined}><button className={`nav-channel ${isActiveVoiceChannel ? "selected" : ""}`} type="button" onClick={() => void joinVoiceChannel(channel)} disabled={channel.canConnect === false || voiceState.status === "connecting"}><span>◖</span>{channel.name}{isActiveVoiceChannel && <em>{voiceState.status}</em>}</button></div>
                 {showVoiceMembers && <div className="voice-channel-members" aria-label={`Participants in ${channel.name}`}>
                   <div className={`voice-member ${voiceState.speaking ? "speaking" : ""}`}>
                     <Avatar name={user.displayName} avatar={memberAvatar(user)} size="small" speaking={voiceState.speaking} />
@@ -1453,7 +1484,12 @@ function App(): React.JSX.Element {
             {canMoveVoice && <label>Move to channel<select value="" onChange={(event) => { if (event.target.value) void moderateVoice("move", participant.identity, event.target.value); setVoiceParticipantMenu(null); }}><option value="">Choose…</option>{voiceChannels.filter((item) => item.id !== voiceParticipantMenu.channelId).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}
           </div>;
         })()}
-        {screenViewerOpen && <div className={`screen-viewer-overlay ${screenViewerFullscreen ? "fullscreen" : ""}`} ref={screenViewerRef} role="dialog" aria-modal="true" aria-label="Stream viewer"><header><div><p className="eyebrow">LIVE STREAMS</p><h2>Stream viewer</h2></div><div className="screen-viewer-actions">{(streamAudioBlocked || voiceState.audioPlaybackBlocked) && <button type="button" onClick={() => void enableStreamAudio()}>Enable stream audio</button>}<button type="button" onClick={() => void toggleScreenViewerFullscreen()}>{screenViewerFullscreen ? "Exit full screen" : "Full screen"}</button><button type="button" className="secondary" onClick={() => setScreenViewerOpen(false)}>Close</button></div></header><div className="screen-viewer-layout"><nav>{voiceState.screenShares.map((share) => <button type="button" className={selectedScreenShareId === share.identity ? "selected" : ""} key={share.identity} onClick={() => { setSelectedScreenShareId(share.identity); setStreamAudioBlocked(false); }}>{share.name}'s screen</button>)}</nav><div className="screen-viewer-stage">{voiceState.screenShares.filter((share) => share.identity === selectedScreenShareId).map((share) => <ScreenShareTile share={share} selected audioEnabled={share.identity !== user.id} onAudioBlocked={() => setStreamAudioBlocked(true)} onVolumeChange={(identity, volume) => voice.setScreenShareVolume(identity, volume)} key={share.identity} />)}{!selectedScreenShareId && <p>Select a stream to view.</p>}</div></div></div>}
+        {channelMenu && canManageChannels && <div className="channel-context-menu" style={{ left: channelMenu.x, top: channelMenu.y }} onClick={(event) => event.stopPropagation()}>
+          <strong>{channelMenu.channel.type === "text" ? "#" : "◖"} {channelMenu.channel.name}</strong>
+          <button type="button" onClick={() => { const channel = channelMenu.channel; setChannelMenu(null); void renameChannel(channel); }}>Rename channel</button>
+          <button type="button" className="danger" onClick={() => { const channel = channelMenu.channel; setChannelMenu(null); void deleteChannel(channel); }}>Delete channel</button>
+        </div>}
+        {screenViewerOpen && <div className={`screen-viewer-overlay ${screenViewerFullscreen ? "fullscreen" : ""}`} ref={screenViewerRef} role="dialog" aria-modal="true" aria-label="Stream viewer"><header><div><p className="eyebrow">LIVE STREAMS</p><h2>Stream viewer</h2></div><div className="screen-viewer-actions">{(streamAudioBlocked || voiceState.audioPlaybackBlocked) && <button type="button" onClick={() => void enableStreamAudio()}>Enable stream audio</button>}<button type="button" onClick={() => void toggleScreenViewerFullscreen()}>Full screen</button><button type="button" className="secondary" onClick={() => void closeScreenViewer()}>Close</button></div></header><div className="screen-viewer-layout"><nav>{voiceState.screenShares.map((share) => <button type="button" className={selectedScreenShareId === share.identity ? "selected" : ""} key={share.identity} onClick={() => { setSelectedScreenShareId(share.identity); setStreamAudioBlocked(false); }}>{share.name}'s screen</button>)}</nav><div className="screen-viewer-stage">{voiceState.screenShares.filter((share) => share.identity === selectedScreenShareId).map((share) => <ScreenShareTile share={share} selected audioEnabled={share.identity !== user.id} onAudioBlocked={() => setStreamAudioBlocked(true)} onVolumeChange={(identity, volume) => voice.setScreenShareVolume(identity, volume)} key={share.identity} />)}{!selectedScreenShareId && <p>Select a stream to view.</p>}</div></div>{screenViewerFullscreen && <button type="button" className="screen-viewer-exit-fullscreen" onClick={() => void toggleScreenViewerFullscreen()} aria-label="Exit full screen">Exit full screen</button>}</div>}
         {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="FreeCord settings"><section className="settings-panel"><div className="settings-header"><div><p className="eyebrow">FREECORD SETTINGS</p><h2>Settings</h2></div><button className="secondary" type="button" onClick={() => setSettingsOpen(false)}>Close</button></div><div className="settings-layout"><nav className="settings-tabs" aria-label="Settings sections"><button type="button" className={settingsTab === "profile" ? "active" : ""} onClick={() => setSettingsTab("profile")}><strong>Profile</strong><small>Identity and account</small></button><button type="button" className={settingsTab === "audio" ? "active" : ""} onClick={() => setSettingsTab("audio")}><strong>Voice &amp; Audio</strong><small>Devices and sensitivity</small></button>{canAccessAdmin && <button type="button" className={settingsTab === "admin" ? "active" : ""} onClick={() => setSettingsTab("admin")}><strong>Admin</strong><small>Members, roles, channels</small></button>}{canViewAudit && <button type="button" className={settingsTab === "audit" ? "active" : ""} onClick={() => setSettingsTab("audit")}><strong>Audit log</strong><small>Administrative activity</small></button>}<button type="button" className="settings-support-link" onClick={() => void window.freecord.openSupportPage()}><strong>☕ Buy me a coffee</strong><small>Support FreeCord</small></button></nav><div className="settings-scroll">
           {settingsTab === "profile" && <><div className="settings-section"><h3>Profile</h3><form className="profile-name-form" onSubmit={(event) => void saveProfile(event)}><label>Display name<input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={100} autoComplete="name" /></label><button type="submit" disabled={profileBusy || !profileDisplayName.trim() || profileDisplayName.trim() === user.displayName}>Save display name</button></form><div className="profile-avatar-settings"><Avatar name={user.displayName} avatar={memberAvatar(user)} /><label className="upload-button">Upload profile picture<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAvatar(file); event.currentTarget.value = ""; }} /></label>{memberAvatar(user) && <button type="button" className="secondary" onClick={() => void window.freecord.removeMyAvatar().then((result) => { if ("userId" in result) { setAuth((current) => current.user ? { ...current, user: { ...current.user, avatar: undefined } } : current); setMembers((current) => current.map((member) => member.id === user.id ? { ...member, avatar: undefined } : member)); setMessage("Profile picture removed."); } else setMessage(result.message); })}>Remove</button>}</div><label>Status<select value={user.status} onChange={(event) => void changeStatus(event.target.value as "active" | "busy" | "away")}><option value="active">Active</option><option value="busy">Busy</option><option value="away">Away</option></select></label><div className="assigned-roles"><span>Assigned roles</span><div>{assignedRoles.length ? assignedRoles.map((role) => <span className="role-chip" key={role.id}>{role.name}</span>) : <span className="role-chip">{user.role}</span>}</div></div></div><div className="settings-section"><h3>Change password</h3><form className="password-form" onSubmit={(event) => void changeProfilePassword(event)}><label>Current password<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label><label>New password<input type="password" value={newProfilePassword} onChange={(event) => setNewProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><label>Confirm new password<input type="password" value={confirmProfilePassword} onChange={(event) => setConfirmProfilePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><button type="submit" disabled={profileBusy || !currentPassword || newProfilePassword.length < 12 || !confirmProfilePassword}>Change password</button></form><p className="hint">Changing your password signs out your other FreeCord sessions.</p></div></>}
           {settingsTab === "audio" && <>
@@ -1461,6 +1497,8 @@ function App(): React.JSX.Element {
               <h3>Voice &amp; Audio</h3>
               <label>Microphone<select value={audioSettings.microphoneId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, microphoneId: event.target.value })}><option value="">System default</option>{voiceState.microphoneDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
               <label>Speaker<select value={audioSettings.outputId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, outputId: event.target.value })}><option value="">System default</option>{voiceState.outputDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
+              <label>Desktop audio source<select value={audioSettings.screenAudioInputId} onChange={(event) => void saveAudioPreferences({ ...audioSettings, screenAudioInputId: event.target.value })}><option value="">Auto-detect PipeWire/Pulse monitor</option>{voiceState.screenAudioDevices.map((device) => <option value={device.deviceId} key={device.deviceId}>{device.label}</option>)}</select></label>
+              <p className="hint">For Linux stream audio, select the monitor source for your speakers or output sink. This track bypasses all microphone processing.</p>
               <label>Input sensitivity<input type="range" min="0" max="1" step="0.01" value={audioSettings.inputSensitivity} onChange={(event) => void saveAudioPreferences({ ...audioSettings, inputSensitivity: Number(event.target.value) })} /></label>
               <p className="hint">Device IDs are stored locally and automatically fall back to the system default if a device is disconnected.</p>
             </div>
@@ -1475,7 +1513,7 @@ function App(): React.JSX.Element {
           </>}
           {settingsTab === "admin" && canAccessAdmin && (canCreateTextChannels || canCreateVoiceChannels || canManageChannels) && <div className="settings-section"><h3>Channels</h3>{(canCreateTextChannels || canCreateVoiceChannels) && <form className="channel-create-form" onSubmit={(event) => void createChannel(event, !canCreateTextChannels && canCreateVoiceChannels ? "voice" : undefined)}><input value={newChannelName} onChange={(event) => setNewChannelName(event.target.value)} placeholder="Channel name" maxLength={64} /><select value={!canCreateTextChannels && canCreateVoiceChannels ? "voice" : newChannelType} onChange={(event) => setNewChannelType(event.target.value as "text" | "voice")}>
             {canCreateTextChannels && <option value="text">Text channel</option>}{canCreateVoiceChannels && <option value="voice">Voice channel</option>}
-          </select><button type="submit" disabled={!newChannelName.trim()}>Create channel</button></form>}{canManageChannels && <div className="channel-editor-list">{channels.map((channel) => <div className="channel-editor-row" key={channel.id}><span>{channel.type === "text" ? "#" : "◖"}</span><input value={channelNameDrafts[channel.id] ?? channel.name} maxLength={100} onChange={(event) => setChannelNameDrafts((current) => ({ ...current, [channel.id]: event.target.value }))} /><button type="button" onClick={() => void renameChannel(channel)} disabled={!channelNameDrafts[channel.id]?.trim() || channelNameDrafts[channel.id]?.trim() === channel.name}>Save</button><button type="button" className="secondary danger" onClick={() => void deleteChannel(channel)}>Delete</button></div>)}</div>}</div>}
+          </select><button type="submit" disabled={!newChannelName.trim()}>Create channel</button></form>}{canManageChannels && <p className="hint">Right-click a text or voice channel in the channel list to rename or delete it.</p>}</div>}
           {settingsTab === "admin" && canAccessAdmin && canManageMemberAccounts && <div className="settings-section member-account-settings"><div className="settings-title-row"><div><h3>Member accounts</h3><p className="hint">Recover an account, clear persistent voice restrictions, or deactivate it without removing message and audit history.</p></div></div><div className="member-account-list">{members.filter((member) => member.id !== user.id && !member.isOwner && (user.role === "owner" || member.role !== "admin")).map((member) => <div key={member.id}><span><strong>{member.displayName}</strong><small>@{member.username} · {member.online ? "online" : "offline"}</small></span><button type="button" className="secondary" onClick={() => { setManagedMember(member); setMemberResetPassword(""); setMemberResetPasswordConfirm(""); setMemberDeactivateConfirm(""); }}>Manage</button></div>)}</div>{managedMember && <div className="member-account-card"><div className="settings-title-row"><div><h4>Manage {managedMember.displayName}</h4><p className="hint">@{managedMember.username}</p></div><button type="button" className="secondary" onClick={closeMemberAdministration} disabled={memberAdminBusy}>Close</button></div>{hasPermission("members.password.reset") && <form className="member-reset-form" onSubmit={(event) => void resetManagedMemberPassword(event)}><h5>Reset password</h5><p className="hint">Sets a temporary password and immediately signs out every existing session. Ask the member to change it after signing in. This does not restore an encryption key held only on another device.</p><label>Temporary password<input type="password" value={memberResetPassword} onChange={(event) => setMemberResetPassword(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><label>Confirm temporary password<input type="password" value={memberResetPasswordConfirm} onChange={(event) => setMemberResetPasswordConfirm(event.target.value)} minLength={12} maxLength={1024} autoComplete="new-password" /></label><button type="submit" disabled={memberAdminBusy || memberResetPassword.length < 12 || memberResetPassword !== memberResetPasswordConfirm}>Reset password and sign out</button></form>}{hasPermission("voice.restrictions.manage") && <div className="member-account-action"><div><h5>Voice restrictions</h5><p className="hint">Clears persistent server mutes for this account. This is server state, not a desktop cache. The member must leave and rejoin voice.</p></div><button type="button" className="secondary" onClick={() => void clearManagedMemberVoiceRestrictions()} disabled={memberAdminBusy}>Clear voice restrictions</button></div>}{hasPermission("members.deactivate") && <div className="member-account-danger"><h5>Deactivate account</h5><p className="hint">Revokes every session, disables sign-in, releases the username, and removes profile data and roles. Messages and audit records remain as “Deleted User”.</p><label>Type <strong>{managedMember.username}</strong> to confirm<input value={memberDeactivateConfirm} onChange={(event) => setMemberDeactivateConfirm(event.target.value)} autoComplete="off" /></label><button type="button" className="danger-button" onClick={() => void deactivateManagedMember()} disabled={memberAdminBusy || memberDeactivateConfirm !== managedMember.username}>Deactivate account</button></div>}</div>}</div>}
           {settingsTab === "admin" && canAccessAdmin && (hasPermission("roles.view") || hasPermission("roles.manage") || hasPermission("roles.assign")) && <div className="settings-section role-settings"><h3>Members and roles</h3><div className="member-role-list">{members.map((member) => { const memberRoles = (member as CommunityMember & ExtendedPrincipal).roles ?? []; return <div key={member.id}><span><strong>{member.displayName}</strong><small>@{member.username}</small></span><div>{memberRoles.length ? memberRoles.map((role) => <span className="role-chip" key={role.id}>{role.name}</span>) : <span className="role-chip">{member.role}</span>}</div></div>; })}</div>
             {hasPermission("roles.manage") && <><form onSubmit={(event) => void createRole(event)}><input value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} maxLength={48} placeholder="Role name" /><div className="permission-grid">{availablePermissions.map((permission) => <label key={permission}><input type="checkbox" checked={newRolePermissions.includes(permission)} onChange={() => togglePermission(permission, newRolePermissions, setNewRolePermissions)} />{permission}</label>)}</div><button type="submit" disabled={!newRoleName.trim()}>Create role</button></form>{roles.filter((role) => role.kind === "custom").map((role) => <details key={role.id}><summary>{role.name}</summary><div className="permission-grid">{availablePermissions.map((permission) => <label key={permission}><input type="checkbox" checked={(roleDraftPermissions[role.id] ?? role.permissions).includes(permission)} onChange={() => togglePermission(permission, roleDraftPermissions[role.id] ?? role.permissions, (next) => setRoleDraftPermissions((current) => ({ ...current, [role.id]: next })))} />{permission}</label>)}</div><button type="button" onClick={() => void saveRole(role)}>Save permissions</button></details>)}</>}

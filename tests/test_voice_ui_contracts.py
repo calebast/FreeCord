@@ -67,6 +67,29 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertNotIn('className="voice-volume"', renderer)
         self.assertIn("position: fixed", styles[styles.index(".voice-participant-menu"):])
 
+    def test_channel_management_uses_an_admin_context_menu(self) -> None:
+        renderer = RENDERER.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+        self.assertIn("openChannelMenu", renderer)
+        self.assertIn('className="channel-context-menu"', renderer)
+        self.assertIn("Rename channel", renderer)
+        self.assertIn("Delete channel", renderer)
+        self.assertNotIn("channel-delete-button", renderer)
+        self.assertNotIn("channel-editor-list", renderer)
+        self.assertIn("position: fixed", styles[styles.index(".channel-context-menu"):])
+
+    def test_stream_viewer_fullscreen_hides_chrome_and_has_a_corner_exit(self) -> None:
+        renderer = RENDERER.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+        self.assertIn("viewer.requestFullscreen()", renderer)
+        self.assertIn("document.exitFullscreen()", renderer)
+        self.assertNotIn("setWindowFullscreen", renderer)
+        self.assertIn('className="screen-viewer-exit-fullscreen"', renderer)
+        fullscreen_styles = styles[styles.index(".screen-viewer-overlay.fullscreen") :]
+        self.assertIn(".screen-viewer-overlay.fullscreen > header { display: none; }", fullscreen_styles)
+        self.assertIn(".screen-viewer-overlay.fullscreen .screen-share-controls { display: none; }", fullscreen_styles)
+        self.assertRegex(fullscreen_styles, r"\.screen-viewer-exit-fullscreen\s*\{[^}]*right:\s*14px;[^}]*bottom:\s*14px;")
+
     def test_screen_media_permissions_and_audio_processing_are_source_scoped(self) -> None:
         postgres_voice = (ROOT / "server" / "postgres-voice.ts").read_text(encoding="utf-8")
         voice = VOICE.read_text(encoding="utf-8")
@@ -83,6 +106,24 @@ class VoiceUiContractTests(unittest.TestCase):
         self.assertIn("canPublishMicrophone?: boolean", self.bridge)
         self.assertIn("token.permissions.canPublishMicrophone ?? token.permissions.canPublish", self.source)
         self.assertIn("if (canPublishMicrophone)", self.source)
+
+    def test_linux_desktop_audio_uses_an_unprocessed_monitor_input(self) -> None:
+        voice = VOICE.read_text(encoding="utf-8")
+        renderer = RENDERER.read_text(encoding="utf-8")
+        main = MAIN.read_text(encoding="utf-8")
+        self.assertIn("captureDesktopAudioInput", voice)
+        self.assertIn("isDesktopAudioDevice", voice)
+        self.assertIn("device.deviceId !== microphoneId", voice)
+        self.assertRegex(voice, r"monitor\(\?: of\)\?|stereo mix|output\.\*capture")
+        self.assertIn("echoCancellation: false", voice)
+        self.assertIn("autoGainControl: false", voice)
+        self.assertIn("noiseSuppression: false", voice)
+        self.assertIn("new LocalAudioTrack(mediaTrack, constraints, true)", voice)
+        self.assertIn("endedAudioTrack", voice)
+        self.assertIn("orphanedScreenTracks", voice)
+        self.assertIn("Desktop audio source", renderer)
+        self.assertIn("Auto-detect PipeWire/Pulse monitor", renderer)
+        self.assertIn("screenAudioInputId: typeof value.screenAudioInputId", main)
 
 
 if __name__ == "__main__":

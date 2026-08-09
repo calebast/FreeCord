@@ -4,6 +4,12 @@ All notable public changes are documented here.
 
 ## Unreleased
 
+## 0.8.0-alpha.3 - 2026-08-09
+
+- Moved channel rename and deletion into an administrator-only right-click menu.
+- Made the stream viewer use true fullscreen with distraction-free controls and a corner exit button.
+- Added a dedicated unprocessed PipeWire/Pulse monitor-input path and source selector for Linux desktop audio.
+
 ## 0.8.0-alpha.2 - 2026-08-08
 
 - Made the public Compose stack deployable directly from Portainer's Web Editor using GHCR service images.
